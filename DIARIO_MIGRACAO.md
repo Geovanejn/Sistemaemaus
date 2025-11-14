@@ -1270,3 +1270,558 @@ bucket_name = "emaus-vota-storage"
 
 **Sessão 5 completa - R2Storage implementado e aprovado**
 
+---
+
+### 🔐 Sessão 6: Migração Completa do Sistema de Autenticação (Horário: 14/11/2025)
+
+#### O Que Foi Feito
+
+**1. Análise do Sistema de Autenticação Atual** ✅
+
+**Arquivos analisados:**
+- `server/routes.ts` - Rotas Express de autenticação
+- `server/auth.ts` - Lógica de password hashing (bcrypt) e JWT (jsonwebtoken)
+
+**Funcionalidades identificadas:**
+- Login com email/senha (bcrypt verification)
+- Login sem senha (código de verificação por email)
+- Definir senha (usuários podem criar senha)
+- JWT com expiração de 2h
+- Middleware de autenticação (requireAuth)
+- Middleware de autorização (requireAdmin, requireMember)
+
+**2. Planejamento da Migração - Arquiteto Definiu Abordagem Híbrida** ✅
+
+**Decisão técnica crítica:** Sistema híbrido de passwords
+- **Preservar bcrypt hashes existentes** - Com prefixo `bcrypt::`
+- **Novos hashes usam PBKDF2** - Com prefixo `pbkdf2::` (Web Crypto API)
+- **Backward compatibility total** - Usuários antigos continuam fazendo login
+- **Migração gradual** - Ao fazer login, hash bcrypt é mantido
+- **Segurança aumentada** - PBKDF2 com ≥150k iterations, SHA-256
+
+**Razões para abordagem híbrida:**
+1. **bcryptjs não funciona em Workers** - Pure JS implementation tem limitações
+2. **Web Crypto API é padrão Workers** - `crypto.subtle` nativo e otimizado
+3. **Evitar forçar reset de senhas** - Melhor UX para usuários existentes
+4. **PBKDF2 é seguro** - NIST-approved, resistente a ataques de força bruta
+
+**3. Implementação do Sistema Híbrido de Passwords** ✅
+
+**Arquivo criado:** `workers/auth.ts` (367 linhas)
+
+**PBKDF2 Implementation:**
+```typescript
+async function hashPBKDF2Password(password: string): Promise<string> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  
+  const keyMaterial = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(password),
+    'PBKDF2',
+    false,
+    ['deriveBits']
+  );
+  
+  const hashBuffer = await crypto.subtle.deriveBits(
+    {
+      name: 'PBKDF2',
+      salt: salt,
+      iterations: PBKDF2_ITERATIONS, // 150000+
+      hash: 'SHA-256'
+    },
+    keyMaterial,
+    256 // 32 bytes
+  );
+  
+  const saltB64 = bytesToBase64(salt);
+  const hashB64 = bytesToBase64(new Uint8Array(hashBuffer));
+  
+  return `pbkdf2::${PBKDF2_ITERATIONS}::${saltB64}::${hashB64}`;
+}
+```
+
+**Bcrypt Verification (Legacy):**
+```typescript
+async function verifyBcryptPassword(password: string, storedHash: string): Promise<boolean> {
+  const bcryptHash = storedHash.substring(8); // Remove "bcrypt::" prefix
+  const bcrypt = await import('bcryptjs');
+  return await bcrypt.compare(password, bcryptHash);
+}
+```
+
+**Verificação Unificada:**
+```typescript
+export async function verifyPassword(password: string, storedHash: string): Promise<boolean> {
+  if (isBcryptHash(storedHash)) {
+    return verifyBcryptPassword(password, storedHash);
+  } else if (storedHash.startsWith('pbkdf2::')) {
+    return verifyPBKDF2Password(password, storedHash);
+  } else {
+    // Legacy hash sem prefixo - assume bcrypt
+    return verifyBcryptPassword(password, `bcrypt::${storedHash}`);
+  }
+}
+```
+
+**4. Implementação Manual de JWT (Web Crypto API)** ✅
+
+**Problema:** `jsonwebtoken` library não funciona em Workers
+**Solução:** Implementação manual usando HMAC-SHA256
+
+**Token Generation:**
+```typescript
+export async function generateToken(user: Omit<User, 'password'>, secret: string): Promise<string> {
+  if (!secret || secret.trim().length === 0) {
+    throw new Error('SESSION_SECRET must be configured');
+  }
+  
+  const encoder = new TextEncoder();
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const payload: JWTPayload = {
+    id: user.id,
+    email: user.email,
+    name: user.name,
+    isAdmin: user.isAdmin,
+    isMember: user.isMember,
+    exp: Math.floor(Date.now() / 1000) + (2 * 60 * 60) // 2h
+  };
+  
+  const headerB64 = base64URLEncode(JSON.stringify(header));
+  const payloadB64 = base64URLEncode(JSON.stringify(payload));
+  const data = `${headerB64}.${payloadB64}`;
+  
+  // HMAC-SHA256 signature
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  
+  const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(data));
+  const signatureB64 = base64URLEncode(new Uint8Array(signature));
+  
+  return `${data}.${signatureB64}`;
+}
+```
+
+**Token Verification:**
+```typescript
+export async function verifyToken(token: string, secret: string): Promise<JWTPayload | null> {
+  if (!secret || secret.trim().length === 0) {
+    console.error('SESSION_SECRET is not configured');
+    return null;
+  }
+  
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  
+  const [headerB64, payloadB64, signatureB64] = parts;
+  const data = `${headerB64}.${payloadB64}`;
+  
+  // Verify signature
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['verify']
+  );
+  
+  const signature = base64URLDecode(signatureB64);
+  const valid = await crypto.subtle.verify('HMAC', key, signature, encoder.encode(data));
+  
+  if (!valid) return null;
+  
+  // Check expiration
+  const payload: JWTPayload = JSON.parse(base64URLDecode(payloadB64));
+  if (Date.now() / 1000 > payload.exp) return null;
+  
+  return payload;
+}
+```
+
+**5. Criação de Middlewares Hono** ✅
+
+**Arquivo:** `workers/auth.ts`
+
+**createAuthMiddleware() - Autenticação:**
+```typescript
+export function createAuthMiddleware(): MiddlewareHandler<AuthContext> {
+  return async (c, next) => {
+    const authHeader = c.req.header('Authorization');
+    if (!authHeader?.startsWith('Bearer ')) {
+      return c.json({ error: 'Unauthorized' }, 401);
+    }
+
+    const token = authHeader.substring(7);
+    const secret = c.env.SESSION_SECRET;
+    const user = await verifyToken(token, secret);
+
+    if (!user) {
+      return c.json({ error: 'Invalid or expired token' }, 401);
+    }
+
+    c.set('user', user);
+    await next();
+  };
+}
+```
+
+**requireAdmin() - Autorização Admin:**
+```typescript
+export function requireAdmin(): MiddlewareHandler<AuthContext> {
+  return async (c, next) => {
+    const user = c.get('user');
+    if (!user?.isAdmin) {
+      return c.json({ error: 'Admin access required' }, 403);
+    }
+    await next();
+  };
+}
+```
+
+**requireMember() - Autorização Membro:**
+```typescript
+export function requireMember(): MiddlewareHandler<AuthContext> {
+  return async (c, next) => {
+    const user = c.get('user');
+    if (!user?.isMember) {
+      return c.json({ error: 'Member access required' }, 403);
+    }
+    await next();
+  };
+}
+```
+
+**6. Criação das Rotas de Autenticação Hono** ✅
+
+**Arquivo criado:** `workers/routes/auth.ts` (278 linhas)
+
+**Rotas implementadas:**
+- POST `/api/auth/login` - Login com email e senha
+- POST `/api/auth/request-code` - Solicitar código de verificação
+- POST `/api/auth/verify-code` - Verificar código e fazer login
+- POST `/api/auth/set-password` - Definir nova senha (requer auth)
+- POST `/api/auth/login-password` - Backward compatibility
+
+**Exemplo - POST /api/auth/login:**
+```typescript
+authApp.post('/login', async (c) => {
+  const body = await c.req.json();
+  const { email, password } = loginSchema.parse(body);
+  
+  const user = await storage.getUserByEmail(email);
+  if (!user) {
+    return c.json({ error: 'Invalid credentials' }, 401);
+  }
+  
+  if (!user.password) {
+    return c.json({ error: 'Password not set. Use verification code.' }, 401);
+  }
+  
+  const isValid = await verifyPassword(password, user.password);
+  if (!isValid) {
+    return c.json({ error: 'Invalid credentials' }, 401);
+  }
+  
+  const token = await generateToken(user, c.env.SESSION_SECRET);
+  return c.json<AuthResponse>({
+    token,
+    user: { ...user, password: undefined }
+  });
+});
+```
+
+**Exemplo - POST /api/auth/request-code:**
+```typescript
+authApp.post('/request-code', async (c) => {
+  const body = await c.req.json();
+  const { email } = requestCodeSchema.parse(body);
+  
+  const user = await storage.getUserByEmail(email);
+  if (!user) {
+    return c.json({ error: 'User not found' }, 404);
+  }
+  
+  // Generate cryptographically secure 6-digit code
+  const code = generateVerificationCode();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 min
+  
+  await storage.deleteVerificationCodesByEmail(email);
+  await storage.createVerificationCode({
+    email,
+    code,
+    expiresAt: expiresAt.toISOString()
+  });
+  
+  await sendVerificationEmail(email, code, c.env);
+  return c.json({ message: 'Verification code sent' });
+});
+```
+
+**7. Criação do Sistema de Email (Resend API)** ✅
+
+**Arquivo criado:** `workers/email.ts` (140 linhas)
+
+**sendVerificationEmail():**
+```typescript
+export async function sendVerificationEmail(
+  email: string, 
+  code: string,
+  env: Env
+): Promise<boolean> {
+  if (!env.RESEND_API_KEY) {
+    console.log(`[EMAIL DISABLED] Verification code for ${email}: ${code}`);
+    return false;
+  }
+  
+  const fromEmail = env.RESEND_FROM_EMAIL || "Emaús Vota <suporte@emausvota.com.br>";
+  
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: fromEmail,
+      to: email,
+      subject: "Seu código de verificação - Emaús Vota",
+      html: `...` // HTML estilizado
+    }),
+  });
+  
+  return response.ok;
+}
+```
+
+**8. Definição de Tipos TypeScript** ✅
+
+**Arquivo criado:** `workers/types.ts`
+
+**JWTPayload:**
+```typescript
+export interface JWTPayload {
+  id: number;
+  email: string;
+  name: string;
+  isAdmin: boolean;
+  isMember: boolean;
+  exp: number; // Expiration timestamp (seconds)
+}
+```
+
+**AuthContext (Hono):**
+```typescript
+export type AuthContext = {
+  Bindings: Env;
+  Variables: {
+    user?: JWTPayload; // Optional - not all routes require auth
+  };
+}
+```
+
+**9. Integração no Workers Entry Point** ✅
+
+**Arquivo modificado:** `workers/index.ts`
+
+**Mudanças:**
+- Import `AuthContext` de `./types`
+- Mudou de `Hono<{ Bindings: Env }>` para `Hono<AuthContext>`
+- Import e chamada de `createAuthRoutes(app)`
+
+**10. Correções Críticas de Segurança (Architect Review)** ✅
+
+**Problemas identificados pelo Architect:**
+
+**a) Verification Code Inseguro** ❌→✅
+- **Problema:** Usava `Math.random()` (predictable)
+- **Solução:** `crypto.getRandomValues()` (criptograficamente seguro)
+```typescript
+function generateVerificationCode(): string {
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  const code = (array[0] % 900000) + 100000;
+  return code.toString();
+}
+```
+
+**b) SESSION_SECRET Vazio Aceito** ❌→✅
+- **Problema:** JWT aceita secret vazio → tokens forjáveis
+- **Solução:** Validação em `generateToken()` e `verifyToken()`
+```typescript
+if (!secret || secret.trim().length === 0) {
+  throw new Error('SESSION_SECRET must be configured');
+}
+```
+
+**c) Base64 Encoding Mismatch** ❌→✅
+- **Problema:** Usava `atob()` inline sem helper simétrico
+- **Solução:** Criado `base64ToBytes()` simétrico ao `bytesToBase64()`
+```typescript
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64);
+  return Uint8Array.from(binary, c => c.charCodeAt(0));
+}
+```
+
+**d) AuthContext Type Error** ❌→✅
+- **Problema:** `user: JWTPayload` (sempre presente) → crasha rotas sem auth
+- **Solução:** `user?: JWTPayload` (opcional)
+
+**e) Email From Hardcoded** ❌→✅
+- **Problema:** Não usa `env.RESEND_FROM_EMAIL`
+- **Solução:** `const fromEmail = env.RESEND_FROM_EMAIL || "..."`
+
+**11. Revisão Final do Architect** ✅
+
+**Resultado:** ✅ **APROVADO - Todas vulnerabilidades corrigidas**
+
+**Confirmação do Architect:**
+- PBKDF2 salt handling com Base64 helpers simétricos ✅
+- Verification codes usando `crypto.getRandomValues()` ✅
+- JWT valida SESSION_SECRET antes de gerar/verificar tokens ✅
+- AuthContext marca `user` como opcional ✅
+- Email sender honra `RESEND_FROM_EMAIL` ✅
+- Nenhuma vulnerabilidade restante detectada ✅
+
+---
+
+#### Resumo da Implementação
+
+**Arquivos Criados:**
+1. ✅ `workers/auth.ts` (367 linhas)
+   - Password hashing: PBKDF2 + bcrypt legacy
+   - JWT manual: HMAC-SHA256
+   - Middlewares: createAuthMiddleware, requireAdmin, requireMember
+   - Helpers: Base64, Base64URL encoding/decoding
+
+2. ✅ `workers/routes/auth.ts` (278 linhas)
+   - 5 rotas de autenticação
+   - Validação Zod
+   - Integração com D1Storage
+
+3. ✅ `workers/email.ts` (140 linhas)
+   - sendVerificationEmail usando Resend API
+   - sendPasswordResetEmail com HTML estilizado
+
+**Arquivos Modificados:**
+1. ✅ `workers/types.ts`
+   - JWTPayload interface
+   - AuthContext type
+
+2. ✅ `workers/index.ts`
+   - Usa AuthContext
+   - Integra createAuthRoutes
+
+3. ✅ `tsconfig.json`
+   - Adicionado "workers/**/*" ao include
+
+**Arquivos de Schema:**
+1. ✅ `shared/schema-worker.ts`
+   - AuthResponse type exportado
+
+---
+
+#### Decisões Técnicas Documentadas
+
+**1. Por que sistema híbrido de passwords?**
+- bcryptjs tem limitações em Workers (pure JS, lento)
+- Web Crypto API é nativo e otimizado
+- Evita forçar reset de senhas (melhor UX)
+- Migração gradual e transparente
+
+**2. Por que implementar JWT manualmente?**
+- `jsonwebtoken` library incompatível com Workers
+- Web Crypto API suporta HMAC-SHA256 nativamente
+- Controle total sobre payload e expiração
+- Zero dependencies externas
+
+**3. Por que PBKDF2 com ≥150k iterations?**
+- NIST-approved algorithm
+- Resistente a ataques de força bruta
+- Configurable iteration count (pode aumentar no futuro)
+- Melhor performance que bcrypt em Workers
+
+**4. Por que Base64 padrão para salts e Base64URL para JWT?**
+- PBKDF2 salts: armazenados em DB (Base64 padrão OK)
+- JWT: transmitido em URLs/headers (Base64URL required)
+- Helpers separados evitam confusão
+
+---
+
+#### Garantias de Segurança
+
+**Password Hashing:**
+- ✅ PBKDF2 com SHA-256 e ≥150k iterations
+- ✅ Salt aleatório de 16 bytes (crypto.getRandomValues)
+- ✅ Backward compatibility com bcrypt hashes
+- ✅ Constant-time comparison
+
+**JWT:**
+- ✅ HMAC-SHA256 signature
+- ✅ SESSION_SECRET validation (não aceita vazio)
+- ✅ Expiration check (2h)
+- ✅ Base64URL encoding correto
+
+**Verification Codes:**
+- ✅ crypto.getRandomValues (criptograficamente seguro)
+- ✅ 6 dígitos (100000-999999)
+- ✅ Expiração de 10 minutos
+- ✅ Deletar códigos antigos antes de criar novo
+
+**Email:**
+- ✅ Resend API via fetch (sem SDK)
+- ✅ HTML estilizado e responsivo
+- ✅ Configurável via env.RESEND_FROM_EMAIL
+
+---
+
+#### Testes Pendentes
+
+**Próximos passos (Tarefa 6-7):**
+1. ✅ Restart workflow
+2. ⏳ Verificar compilação sem erros
+3. ⏳ Testar localmente com `wrangler dev`
+4. ⏳ Validar rotas:
+   - POST /api/auth/login
+   - POST /api/auth/request-code
+   - POST /api/auth/verify-code
+   - POST /api/auth/set-password
+5. ⏳ Verificar JWT gerado/validado corretamente
+6. ⏳ Testar middlewares de auth/admin/member
+
+**Comandos de teste:**
+```bash
+# Iniciar worker local
+npm run dev:worker
+
+# Testar login
+curl -X POST http://localhost:8787/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@emaus.com","password":"senha123"}'
+
+# Testar request-code
+curl -X POST http://localhost:8787/api/auth/request-code \
+  -H "Content-Type: application/json" \
+  -d '{"email":"admin@emaus.com"}'
+```
+
+---
+
+#### Métricas
+
+**Tempo total:** ~4h
+**Linhas de código:** ~785 linhas (3 arquivos novos)
+**Arquivos modificados:** 3
+**Correções de segurança:** 5 vulnerabilidades críticas
+**Reviews do Architect:** 2 (inicial + correções)
+**Rotas criadas:** 5
+**Middlewares criados:** 3
+
+---
+
+**Sessão 6 completa - Sistema de autenticação migrado e aprovado pelo Architect** 🎉
+

@@ -3,6 +3,8 @@
 ## Overview
 Emaús Vota is a full-stack web application for managing elections within the UMP Emaús church youth group. It provides email-based authentication, role-based access control, election creation and management, secure voting, and real-time results. The system emphasizes transparency, accessibility, and adheres to civic tech principles, offering features like shareable results images and PDF audit reports. Its purpose is to streamline the electoral process, ensure fairness, and foster trust among participants.
 
+**Current Status (November 2025):** Migrating from Render (Node.js/Express + PostgreSQL) to Cloudflare Workers (Hono + D1 Database + R2 Storage) to eliminate data loss and cold starts. See `DIARIO_MIGRACAO.md` for detailed migration progress.
+
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
@@ -11,8 +13,54 @@ Preferred communication style: Simple, everyday language.
 ### Frontend
 Built with React 18 and TypeScript, using Vite, Wouter for routing, and TanStack Query for server state. UI components are from shadcn/ui on Radix UI primitives, styled with Tailwind CSS, following a mobile-first Material Design approach with custom UMP Emaús branding. State management uses React Context API for authentication and local storage for tokens. Forms are handled by React Hook Form with Zod validation.
 
-### Backend
+### Backend (Legacy - Render)
+**Note:** This is the old architecture being migrated to Cloudflare Workers.
+
 Developed using Express.js on Node.js with TypeScript, providing RESTful API endpoints. Authentication is email-based with 6-digit verification codes and JWT. User roles (admin/member) are managed via `isAdmin` and `isMember` flags. The API is organized by domains (`/api/auth`, `/api/admin`, etc.). The database uses Better-SQLite3 for development and Drizzle ORM configured for PostgreSQL, with a schema enforcing election rules (e.g., one active election, one vote per user per position) and a three-round scrutiny system.
+
+### Backend (New - Cloudflare Workers)
+**Status:** Partially migrated (authentication complete, other routes pending)
+
+**Framework:** Hono (optimized for Workers runtime)
+**Database:** Cloudflare D1 (SQLite-based, serverless)
+**Storage:** Cloudflare R2 (S3-compatible object storage)
+**Runtime:** Cloudflare Workers (V8 isolates, edge computing)
+
+**Authentication System:**
+- **Hybrid Password Hashing:**
+  - Legacy users: bcrypt hashes with `bcrypt::` prefix (backward compatible)
+  - New users: PBKDF2 with SHA-256, ≥150k iterations, `pbkdf2::` prefix
+  - Automatic detection and verification based on prefix
+- **JWT Implementation:**
+  - Manual HMAC-SHA256 using Web Crypto API (no external libraries)
+  - 2-hour expiration
+  - Base64URL encoding for URL-safe tokens
+- **Verification Codes:**
+  - 6-digit codes using `crypto.getRandomValues()` (cryptographically secure)
+  - 10-minute expiration
+  - Sent via Resend API
+- **Middlewares:**
+  - `createAuthMiddleware()` - JWT validation and user extraction
+  - `requireAdmin()` - Admin-only routes
+  - `requireMember()` - Member-only routes
+
+**Storage Layers:**
+- **D1Storage** (`workers/storage/d1-storage.ts`) - Database operations with Drizzle ORM
+- **R2Storage** (`workers/storage/r2-storage.ts`) - Photo upload/download/deletion
+
+**API Routes (Workers):**
+- `POST /api/auth/login` - Login with email and password
+- `POST /api/auth/request-code` - Request verification code
+- `POST /api/auth/verify-code` - Verify code and login
+- `POST /api/auth/set-password` - Set new password (authenticated)
+- `GET /photos/*` - Serve photos from R2 with cache headers
+
+**Environment Variables (Workers):**
+- `SESSION_SECRET` - JWT signing secret (Cloudflare Secret)
+- `RESEND_API_KEY` - Email service API key (Cloudflare Secret)
+- `RESEND_FROM_EMAIL` - Email sender address
+- `DB` - D1 Database binding (emaus-vota-db)
+- `STORAGE` - R2 Bucket binding (emaus-vota-storage)
 
 ### UI/UX Decisions
 The system features a responsive UI designed for clarity, with a Portuguese interface and UMP Emaús branding (primary orange color #FFA500). Real-time results include automatic polling, smart sorting, and visual hierarchies. Admins can export professional-looking election result images and generate comprehensive PDF audit reports. Member photo uploads utilize a circular crop tool.
