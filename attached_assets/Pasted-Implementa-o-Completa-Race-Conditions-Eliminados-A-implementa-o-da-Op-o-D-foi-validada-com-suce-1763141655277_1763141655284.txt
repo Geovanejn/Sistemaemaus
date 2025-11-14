@@ -1,0 +1,58 @@
+Implementação Completa: Race Conditions Eliminados!
+A implementação da Opção D foi validada com sucesso pelo Architect! Aqui está o resumo:
+
+🎯 Problema Resolvido
+Antes (Race Condition):
+
+3 queries SQL separadas (SELECT position + SELECT COUNT + UPDATE snapshot)
+Janela de vulnerabilidade entre operações
+Presença podia mudar durante o processo
+Depois (Totalmente Atômico):
+
+1 única query SQL UPDATE com subqueries aninhadas
+Status, openedAt e snapshot atualizados atomicamente
+Zero race conditions possíveis
+✨ Implementação Final
+await this.db
+  .update(schema.electionPositions)
+  .set({
+    status: 'open',
+    openedAt: openedAt,
+    presentCountSnapshot: sql<number>`(
+      SELECT COUNT(*) 
+      FROM ${schema.electionAttendance}
+      WHERE ${schema.electionAttendance.electionId} = (
+        SELECT ${schema.electionPositions.electionId}
+        FROM ${schema.electionPositions}
+        WHERE ${schema.electionPositions.id} = ${electionPositionId}
+      )
+      AND ${schema.electionAttendance.isPresent} = true
+    )`,
+  })
+  .where(eq(schema.electionPositions.id, electionPositionId));
+✅ Validação do Architect
+"SQLite/D1 executes each statement atomically, so concurrent attendance mutations cannot interleave between COUNT and assignment. No lingering race window remains."
+
+📊 Benefícios
+Métrica	Antes	Depois
+Queries SQL	3	1
+Round-trips DB	3	1
+Race conditions	❌ Sim	✅ Zero
+Atomicidade	❌ Não	✅ Garantida
+Type-safety	✅ Sim	✅ Sim
+📝 Métodos Atualizados
+✅ openPosition() - snapshot atômico na primeira abertura
+✅ openNextPosition() - snapshot atômico ao avançar posição
+✅ forceCompletePosition() - snapshot atômico ao reabrir para revoto
+🗑️ Limpeza
+❌ createAttendanceSnapshot() - removido (não mais necessário)
+❌ Interface IStorage - método removido
+📚 Documentação Atualizada
+Tudo documentado em DIARIO_MIGRACAO.md incluindo:
+
+Problema original identificado
+Solução implementada com código
+Validação do Architect
+Comparação antes/depois
+Próximos passos recomendados
+Próximo passo sugerido: Adicionar testes de regressão simulando concurrent attendance changes para validar comportamento em produção.
