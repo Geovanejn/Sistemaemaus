@@ -13,7 +13,7 @@ compatibility_flags = ["nodejs_compat"]
 [[d1_databases]]
 binding = "DB"
 database_name = "emaus-vota-db"
-database_id = "SUBSTITUA_PELO_SEU_DATABASE_ID"  # ⚠️ SUBSTITUIR após criar o database!
+database_id = "bb0bdd12-c0a1-44c6-b3fc-dba40765a508"
 migrations_dir = "./migrations"
 
 # ============================================
