@@ -436,33 +436,59 @@ npx wrangler dev --local
 
 #### Problemas Identificados (Architect Review)
 
-**1. forceCompletePosition - Lógica Incompleta**
-- ❌ Não implementa limpeza completa (votos, vencedores, candidatos)
-- ❌ Não persiste o `reason` na base de dados
-- ⚠️ Implementação parcial funcionando, mas falta lógica completa do servidor
+**Status após 3 revisões:** D1Storage está ~85% funcional mas precisa refinamentos em analytics
 
-**2. Métodos de Analytics Pendentes**
-- ⏳ Necessitam joins complexos com múltiplas tabelas
-- ⏳ Lógica de agregação e cálculos
-- ⏳ Podem ser implementados após integração básica
+**1. Métodos de Analytics - Problemas de Lógica** ⚠️
+- **getElectionResults**: 
+  - ✅ Estrutura básica implementada
+  - ❌ Verifica status "active" ao invés de "open"
+  - ❌ Queries N+1 (ineficiente)
+  - ❌ Falta photo URLs dos candidatos
+  - ❌ Cálculo de maioria deveria usar snapshot de presença por posição
+
+- **getLatestElectionResults**:
+  - ✅ Implementado
+  - ❌ Pode retornar eleições não finalizadas (deveria filtrar por isActive/closedAt)
+
+- **getVoterAttendance**:
+  - ✅ Implementado com agregação básica
+  - ❌ Não inclui membros ausentes (deveria joinnar com attendance)
+
+- **getVoteTimeline**:
+  - ✅ Implementado com todos os joins
+  - ⚠️ Falta histórico de escrutínios múltiplos
+
+- **getElectionAuditData**:
+  - ✅ Implementado chamando outros métodos
+  - ⚠️ Estrutura parcial (depende dos refinamentos acima)
+
+**2. forceCompletePosition - Lógica de Reabertura** ⚠️
+- ✅ Limpeza de votos/vencedores implementada
+- ❌ Não deveria limpar candidatos na reabertura (devem persistir para revoto)
+- ❌ Status deveria ser "open" ao invés de "pending" 
+- ❌ Falta restaurar openedAt quando reabrir
 
 #### Próximos Passos
 
-**Prioridade Alta:**
-1. Completar forceCompletePosition com lógica de limpeza
-2. Integrar D1Storage no workers/index.ts
-3. Testar endpoints básicos (auth, elections)
+**Opção A: Integração Imediata (Rápida)**
+1. Integrar D1Storage no workers/index.ts
+2. Testar endpoints básicos (auth, login, elections)
+3. Refinar analytics conforme necessário durante uso real
+4. **Vantagem:** Progresso rápido, refinamentos guiados por necessidade real
+5. **Desvantagem:** Analytics podem ter bugs em edge cases
 
-**Prioridade Média:**
-4. Implementar getElectionResults
-5. Implementar getVoterAttendance
-6. Implementar getVoteTimeline
-7. Implementar getElectionAuditData
+**Opção B: Refinamento Completo (Robusta)**
+1. Corrigir todos os 6 problemas identificados pelo arquiteto
+2. Testar cada método isoladamente
+3. Só então integrar no worker
+4. **Vantagem:** Código mais robusto desde o início
+5. **Desvantagem:** Mais tempo antes da primeira integração
 
-**Prioridade Baixa:**
-8. Implementar R2Storage para fotos
-9. Migrar todas as rotas Express para Hono
-10. Implementar cron jobs
+**Recomendação:** Opção A (integração iterativa)
+- Core CRUD funciona (users, elections, votes)
+- Analytics funcionam para casos básicos
+- Refinamentos podem ser feitos conforme necessidade
+- Permite validar arquitetura geral mais cedo
 
 ---
 

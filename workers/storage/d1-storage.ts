@@ -201,14 +201,35 @@ export class D1Storage implements IStorage {
     }
 
     if (shouldReopen) {
+      console.log(`[ADMIN OVERRIDE] Clearing ALL votes, winners, and candidates for position ${electionPositionId} to reopen`);
+      
+      await this.db
+        .delete(schema.votes)
+        .where(and(
+          eq(schema.votes.electionId, position.electionId),
+          eq(schema.votes.positionId, position.positionId)
+        ));
+
+      await this.db
+        .delete(schema.electionWinners)
+        .where(and(
+          eq(schema.electionWinners.electionId, position.electionId),
+          eq(schema.electionWinners.positionId, position.positionId)
+        ));
+
+      await this.clearCandidatesForPosition(position.positionId, position.electionId);
+
       await this.db
         .update(schema.electionPositions)
         .set({ 
-          status: 'open',
+          status: 'pending',
           currentScrutiny: 1,
-          openedAt: new Date().toISOString()
+          openedAt: null,
+          closedAt: null
         })
         .where(eq(schema.electionPositions.id, electionPositionId));
+
+      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} fully reset to pending for revote (all votes, winners, and candidates cleared)`);
     } else {
       await this.db
         .update(schema.electionPositions)
@@ -370,11 +391,146 @@ export class D1Storage implements IStorage {
   }
 
   async getElectionResults(electionId: number): Promise<ElectionResults | null> {
-    throw new Error('Not implemented yet');
+    const election = await this.getElectionById(electionId);
+    if (!election) return null;
+
+    const electionPositionsRaw = await this.db
+      .select({
+        id: schema.electionPositions.id,
+        electionId: schema.electionPositions.electionId,
+        positionId: schema.electionPositions.positionId,
+        orderIndex: schema.electionPositions.orderIndex,
+        status: schema.electionPositions.status,
+        currentScrutiny: schema.electionPositions.currentScrutiny,
+        openedAt: schema.electionPositions.openedAt,
+        closedAt: schema.electionPositions.closedAt,
+        positionName: schema.positions.name,
+      })
+      .from(schema.electionPositions)
+      .leftJoin(schema.positions, eq(schema.electionPositions.positionId, schema.positions.id))
+      .where(eq(schema.electionPositions.electionId, electionId))
+      .orderBy(asc(schema.electionPositions.orderIndex));
+
+    const presentCount = await this.getPresentCount(electionId);
+    const activePosition = electionPositionsRaw.find(ep => ep.status === 'active');
+
+    const results: ElectionResults = {
+      electionId: election.id,
+      electionName: election.name,
+      isActive: election.isActive,
+      currentScrutiny: activePosition?.currentScrutiny || 1,
+      presentCount,
+      createdAt: election.createdAt,
+      closedAt: election.closedAt,
+      positions: [],
+    };
+
+    const winners = await this.getElectionWinners(electionId);
+    const winnersMap = new Map(winners.map(w => [w.positionId, { candidateId: w.candidateId, wonAtScrutiny: w.wonAtScrutiny }]));
+
+    for (const electionPosition of electionPositionsRaw) {
+      const currentScrutiny = electionPosition.currentScrutiny;
+      const positionId = electionPosition.positionId;
+
+      const votes = await this.db.query.votes.findMany({
+        where: and(
+          eq(schema.votes.electionId, electionId),
+          eq(schema.votes.positionId, positionId),
+          eq(schema.votes.scrutinyRound, currentScrutiny)
+        ),
+        with: {
+          candidate: true,
+          voter: true,
+        },
+      });
+
+      const candidateVotes = new Map<number, number>();
+      const candidateData = new Map<number, any>();
+      const voters = new Set<number>();
+
+      for (const vote of votes) {
+        const candidateId = vote.candidateId;
+        candidateVotes.set(candidateId, (candidateVotes.get(candidateId) || 0) + 1);
+        voters.add(vote.voterId);
+        if (!candidateData.has(candidateId)) {
+          candidateData.set(candidateId, {
+            candidateId,
+            candidateName: vote.candidate.name,
+            candidateEmail: vote.candidate.email,
+            photoUrl: "",
+          });
+        }
+      }
+
+      const totalVoters = voters.size;
+      const majorityThreshold = currentScrutiny === 3 ? 1 : Math.floor(presentCount / 2) + 1;
+
+      const candidatesArray = Array.from(candidateData.values()).map(c => ({
+        ...c,
+        voteCount: candidateVotes.get(c.candidateId) || 0,
+        isElected: false,
+        electedInScrutiny: undefined as number | undefined,
+      })).sort((a, b) => b.voteCount - a.voteCount);
+
+      let winnerId: number | undefined;
+      let winnerScrutiny: number | undefined;
+      let needsNextScrutiny = false;
+
+      const winner = winnersMap.get(positionId);
+      if (winner) {
+        winnerId = winner.candidateId;
+        winnerScrutiny = winner.wonAtScrutiny;
+      } else if (candidatesArray.length > 0) {
+        const topCandidate = candidatesArray[0];
+        if (currentScrutiny < 3 && topCandidate.voteCount >= majorityThreshold) {
+          winnerId = topCandidate.candidateId;
+          winnerScrutiny = currentScrutiny;
+        } else if (currentScrutiny === 3) {
+          if (candidatesArray.length > 1 && topCandidate.voteCount === candidatesArray[1].voteCount) {
+            needsNextScrutiny = false;
+          } else if (topCandidate.voteCount > 0) {
+            winnerId = topCandidate.candidateId;
+            winnerScrutiny = 3;
+          }
+        } else if (currentScrutiny < 3 && electionPosition.status === 'active') {
+          needsNextScrutiny = true;
+        }
+      }
+
+      if (winnerId) {
+        const electedCandidate = candidatesArray.find(c => c.candidateId === winnerId);
+        if (electedCandidate) {
+          electedCandidate.isElected = true;
+          electedCandidate.electedInScrutiny = winnerScrutiny;
+        }
+      }
+
+      results.positions.push({
+        positionId: electionPosition.positionId,
+        positionName: electionPosition.positionName || "",
+        status: electionPosition.status,
+        currentScrutiny,
+        orderIndex: electionPosition.orderIndex,
+        totalVoters,
+        majorityThreshold,
+        needsNextScrutiny,
+        winnerId,
+        winnerScrutiny,
+        candidates: candidatesArray,
+      });
+    }
+
+    return results;
   }
 
   async getLatestElectionResults(): Promise<ElectionResults | null> {
-    throw new Error('Not implemented yet');
+    const elections = await this.db.query.elections.findMany({
+      orderBy: [desc(schema.elections.createdAt)],
+      limit: 1,
+    });
+
+    if (elections.length === 0) return null;
+    return await this.getElectionResults(elections[0].id);
   }
 
   async getElectionWinners(electionId: number): Promise<Array<{ userId: number; positionId: number; candidateId: number; wonAtScrutiny: number }>> {
@@ -394,15 +550,85 @@ export class D1Storage implements IStorage {
   }
 
   async getVoterAttendance(electionId: number): Promise<Array<any>> {
-    throw new Error('Not implemented yet');
+    const votesWithUsers = await this.db.query.votes.findMany({
+      where: eq(schema.votes.electionId, electionId),
+      with: {
+        voter: true,
+      },
+      orderBy: [asc(schema.votes.createdAt)],
+    });
+
+    const voterMap = new Map();
+    for (const vote of votesWithUsers) {
+      const voterId = vote.voter.id;
+      if (!voterMap.has(voterId)) {
+        voterMap.set(voterId, {
+          voterId,
+          voterName: vote.voter.fullName,
+          voterEmail: vote.voter.email,
+          firstVoteAt: vote.createdAt,
+          totalVotes: 0,
+        });
+      }
+      const voter = voterMap.get(voterId);
+      voter.totalVotes++;
+      if (vote.createdAt < voter.firstVoteAt) {
+        voter.firstVoteAt = vote.createdAt;
+      }
+    }
+
+    return Array.from(voterMap.values()).sort((a, b) => 
+      a.voterName.localeCompare(b.voterName)
+    );
   }
 
   async getVoteTimeline(electionId: number): Promise<Array<any>> {
-    throw new Error('Not implemented yet');
+    const votesWithRelations = await this.db.query.votes.findMany({
+      where: eq(schema.votes.electionId, electionId),
+      with: {
+        voter: true,
+        position: true,
+        candidate: true,
+      },
+      orderBy: [asc(schema.votes.createdAt)],
+    });
+
+    return votesWithRelations.map(v => ({
+      voterId: v.voter.id,
+      voterName: v.voter.fullName,
+      voterEmail: v.voter.email,
+      positionName: v.position.name,
+      candidateName: v.candidate.name,
+      scrutinyRound: v.scrutinyRound,
+      votedAt: v.createdAt,
+    }));
   }
 
   async getElectionAuditData(electionId: number): Promise<any | null> {
-    throw new Error('Not implemented yet');
+    const results = await this.getElectionResults(electionId);
+    if (!results) return null;
+
+    const election = await this.getElectionById(electionId);
+    if (!election) return null;
+
+    const positions = await this.getElectionPositions(electionId);
+    const completedPositions = positions.filter(p => p.status === 'completed');
+
+    const members = await this.getAllMembers(true);
+    const totalMembers = members.filter(m => m.activeMember).length;
+
+    return {
+      results,
+      electionMetadata: {
+        createdAt: election.createdAt,
+        closedAt: election.closedAt || null,
+        totalPositions: positions.length,
+        completedPositions: completedPositions.length,
+        totalMembers,
+      },
+      voterAttendance: await this.getVoterAttendance(electionId),
+      voteTimeline: await this.getVoteTimeline(electionId),
+    };
   }
 
   async createVerificationCode(data: InsertVerificationCode): Promise<VerificationCode> {
