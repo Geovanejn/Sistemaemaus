@@ -341,8 +341,8 @@ export class SQLiteStorage implements IStorage {
     const stmt = db.prepare("UPDATE elections SET is_active = 0 WHERE id = ?");
     stmt.run(id);
     
-    // Close all election_positions
-    db.prepare("UPDATE election_positions SET status = 'completed', closed_at = datetime('now') WHERE election_id = ?").run(id);
+    // Close all election_positions but DON'T set closed_at (that's only for finalized elections)
+    db.prepare("UPDATE election_positions SET status = 'completed' WHERE election_id = ?").run(id);
   }
 
   finalizeElection(id: number): void {
@@ -351,8 +351,8 @@ export class SQLiteStorage implements IStorage {
     const stmt = db.prepare("UPDATE elections SET is_active = 0, closed_at = ? WHERE id = ?");
     stmt.run(closedAt, id);
     
-    // Close all election_positions if not already closed
-    db.prepare("UPDATE election_positions SET status = 'completed', closed_at = ? WHERE election_id = ? AND status != 'completed'").run(closedAt, id);
+    // Close all election_positions and set closed_at (regardless of current status)
+    db.prepare("UPDATE election_positions SET status = 'completed', closed_at = ? WHERE election_id = ?").run(closedAt, id);
   }
 
   getElectionHistory(): Election[] {
@@ -772,8 +772,8 @@ export class SQLiteStorage implements IStorage {
   }
 
   initializeAttendance(electionId: number): void {
-    // Create attendance records for all active members only
-    const members = this.getAllMembers().filter(m => m.activeMember);
+    // Create attendance records for all active members only (excluding admins)
+    const members = this.getAllMembers(true).filter(m => m.activeMember);
     
     for (const member of members) {
       // Check if attendance already exists
