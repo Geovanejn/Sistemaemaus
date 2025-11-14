@@ -561,6 +561,165 @@ Cenário problemático atual:
 
 ---
 
-**Sessão 3 pausada**  
-**Aguardando decisão do usuário:** Implementar snapshots agora (Opção 1) ou aceitar limitação (Opção 2)?
+**Decisão do usuário:** ✅ Opção 1 - Implementar snapshots agora com documentação completa
+
+---
+
+#### Implementação de Snapshots de Presença Por Posição
+
+**1. Schema - Novo Campo `presentCountSnapshot`** ✅
+
+**Arquivo:** `shared/schema-worker.ts` (linhas 112-122)
+
+```typescript
+// ATTENDANCE SNAPSHOT: Number of members present when THIS specific position opened
+// WHY: Prevents incorrect majority calculations when attendance changes between positions
+// EXAMPLE: 
+//   - Position A opens with 50 present (majority = 26 votes)
+//   - During Position A voting, 2 members leave
+//   - Position B opens with 48 present (majority = 25 votes)
+//   - WITHOUT snapshot: Both positions would incorrectly use global presentCount
+//   - WITH snapshot: Position A uses 50, Position B uses 48 (correct!)
+// POPULATED: When openPosition() or openNextPosition() is called
+// USED BY: getElectionResults() to calculate accurate majorityThreshold per position
+presentCountSnapshot: integer("present_count_snapshot"),
+```
+
+**2. Migração D1** ✅
+
+**Arquivo gerado:** `migrations/0001_dapper_anita_blake.sql`
+```sql
+ALTER TABLE `election_positions` ADD `present_count_snapshot` integer;
+```
+
+**Aplicado com sucesso:** `npx wrangler d1 migrations apply emaus-vota-db --local`
+- 15 comandos da migração inicial (0000_loose_prima.sql)
+- 2 comandos da nova migração (0001_dapper_anita_blake.sql)
+
+**3. Método `createAttendanceSnapshot()`** ✅
+
+**Arquivo:** `workers/storage/d1-storage.ts` (linhas 326-383)
+
+**O que faz:**
+1. Busca o electionPosition pelo ID
+2. Conta quantos membros estão presentes (`isPresent=true`) na eleição
+3. Armazena esse número no campo `presentCountSnapshot` do electionPosition
+
+**Quando é chamado:**
+- Automaticamente por `openPosition()` quando primeira posição abre
+- Automaticamente por `openNextPosition()` quando avança para próxima posição
+- Manualmente via `forceCompletePosition()` quando reabre posição para revoto
+
+**Logs gerados:**
+```
+[SNAPSHOT] Position {id}: Capturing {count} present members
+[SNAPSHOT] Position {id}: Snapshot created with {count} present
+```
+
+**4. Atualização de `openPosition()`** ✅
+
+**Arquivo:** `workers/storage/d1-storage.ts` (linhas 197-223)
+
+**Mudanças:**
+- Adiciona `openedAt: new Date().toISOString()` ao abrir posição
+- Chama `createAttendanceSnapshot(electionPositionId)` imediatamente após abrir
+- Documentação JSDoc completa explicando o propósito
+
+**5. Atualização de `openNextPosition()`** ✅
+
+**Arquivo:** `workers/storage/d1-storage.ts` (linhas 156-195)
+
+**Mudanças:**
+- Adiciona `openedAt: new Date().toISOString()` ao abrir próxima posição
+- Chama `createAttendanceSnapshot(next.id)` imediatamente após abrir
+- Documentação JSDoc completa explicando o propósito
+
+**6. Atualização de `getElectionResults()`** ✅
+
+**Arquivo:** `workers/storage/d1-storage.ts` (linhas 483-593)
+
+**Mudanças críticas:**
+
+**Query atualizada para incluir snapshot:**
+```typescript
+const electionPositionsRaw = await this.db
+  .select({
+    // ... outros campos
+    presentCountSnapshot: schema.electionPositions.presentCountSnapshot,
+  })
+```
+
+**Cálculo de maioria usando snapshot:**
+```typescript
+// ANTES (INCORRETO):
+const majorityThreshold = currentScrutiny === 3 ? 1 : Math.floor(presentCount / 2) + 1;
+
+// DEPOIS (CORRETO):
+const snapshotCount = electionPosition.presentCountSnapshot ?? presentCount;
+const majorityThreshold = currentScrutiny === 3 ? 1 : Math.floor(snapshotCount / 2) + 1;
+```
+
+**Fallback para compatibilidade:**
+- Se `presentCountSnapshot` for `null` (posições antigas), usa `presentCount` global
+- Garante compatibilidade com dados existentes antes da implementação de snapshots
+
+**Log adicionado:**
+```
+[RESULTS] Position {name}: snapshot={count}, majority={threshold}, scrutiny={round}
+```
+
+**7. Atualização de `forceCompletePosition()`** ✅
+
+**Arquivo:** `workers/storage/d1-storage.ts` (linhas 232-304)
+
+**Mudanças ao reabrir posição (`shouldReopen=true`):**
+1. Limpa votos e vencedores (preserva candidatos) ✅
+2. Reseta status para `'open'` e scrutiny para `1` ✅
+3. **Preserva `openedAt` original** ✅
+4. **Recria snapshot com presença ATUAL** via `createAttendanceSnapshot()` ✅
+
+**Por que recriar snapshot ao reabrir:**
+- Presença pode ter mudado desde abertura original
+- Snapshot atualizado garante maioria correta para revoto
+- Exemplo: Se 5 membros saíram, maioria para revoto deve ser calculada com presença atual
+
+**Log atualizado:**
+```
+[ADMIN OVERRIDE] Position {id} reopened for revote (votes/winners cleared, 
+candidates preserved, status='open', original openedAt preserved, snapshot recreated)
+```
+
+---
+
+#### Resumo da Implementação
+
+**Arquivos modificados:**
+1. ✅ `shared/schema-worker.ts` - Campo `presentCountSnapshot` adicionado
+2. ✅ `migrations/0001_dapper_anita_blake.sql` - Migração gerada e aplicada
+3. ✅ `workers/storage/d1-storage.ts` - 5 métodos atualizados:
+   - `createAttendanceSnapshot()` - implementado do zero
+   - `openPosition()` - chama snapshot + openedAt
+   - `openNextPosition()` - chama snapshot + openedAt
+   - `getElectionResults()` - usa snapshot ao invés de presentCount global
+   - `forceCompletePosition()` - recria snapshot ao reabrir
+
+**Compatibilidade com dados existentes:**
+- ✅ Fallback para `presentCount` global se `presentCountSnapshot` for `null`
+- ✅ Posições antigas continuam funcionando (cálculo menos preciso, mas funcional)
+- ✅ Novas posições sempre terão snapshots corretos
+
+**Cenário de teste para validar:**
+```
+1. Criar eleição com 50 membros presentes
+2. Abrir Posição A (snapshot = 50, maioria = 26)
+3. Marcar 2 membros como ausentes (presente = 48)
+4. Avançar para Posição B (snapshot = 48, maioria = 25)
+5. Verificar que getElectionResults() retorna:
+   - Posição A: majorityThreshold = 26 (usando snapshot de 50)
+   - Posição B: majorityThreshold = 25 (usando snapshot de 48)
+```
+
+---
+
+**Sessão 3 completa - Aguardando review do Architect**
 

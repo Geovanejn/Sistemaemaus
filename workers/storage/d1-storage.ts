@@ -150,6 +150,13 @@ export class D1Storage implements IStorage {
       .where(eq(schema.electionPositions.id, electionPositionId));
   }
 
+  /**
+   * Opens the next position in sequence after current position is completed
+   * CRITICAL: Creates attendance snapshot to capture current present count
+   * 
+   * @param electionId - ID of the election
+   * @returns The newly opened position, or null if no more positions
+   */
   async openNextPosition(electionId: number): Promise<ElectionPosition | null> {
     const completed = await this.db.query.electionPositions.findMany({
       where: and(
@@ -166,19 +173,46 @@ export class D1Storage implements IStorage {
     const next = all[completed.length];
     if (!next) return null;
 
+    // Open the position first
     await this.db
       .update(schema.electionPositions)
-      .set({ status: 'open' })
+      .set({ 
+        status: 'open',
+        openedAt: new Date().toISOString()
+      })
       .where(eq(schema.electionPositions.id, next.id));
+
+    // CRITICAL: Create attendance snapshot immediately after opening
+    // This captures how many members are present RIGHT NOW for THIS position
+    // Even if members leave/arrive later, this position's majority will be calculated
+    // based on the attendance at the moment it opened
+    await this.createAttendanceSnapshot(next.id);
 
     return await this.getElectionPositionById(next.id);
   }
 
+  /**
+   * Opens a specific position (typically the first one in an election)
+   * CRITICAL: Creates attendance snapshot to capture current present count
+   * 
+   * @param electionPositionId - ID of the position to open
+   * @returns The opened position
+   * @throws Error if position not found
+   */
   async openPosition(electionPositionId: number): Promise<ElectionPosition> {
     await this.db
       .update(schema.electionPositions)
-      .set({ status: 'open' })
+      .set({ 
+        status: 'open',
+        openedAt: new Date().toISOString()
+      })
       .where(eq(schema.electionPositions.id, electionPositionId));
+
+    // CRITICAL: Create attendance snapshot immediately after opening
+    // This captures how many members are present RIGHT NOW for THIS position
+    // Even if members leave/arrive later, this position's majority will be calculated
+    // based on the attendance at the moment it opened
+    await this.createAttendanceSnapshot(electionPositionId);
 
     const result = await this.getElectionPositionById(electionPositionId);
     if (!result) throw new Error('Position not found');
@@ -192,6 +226,20 @@ export class D1Storage implements IStorage {
       .where(eq(schema.electionPositions.id, electionPositionId));
   }
 
+  /**
+   * Admin override to force complete or reopen a position
+   * 
+   * CRITICAL when reopening (shouldReopen=true):
+   * - Clears all votes and winners for this position
+   * - Preserves candidates (they stay for the revote)
+   * - Recreates attendance snapshot with CURRENT attendance
+   * - Resets scrutiny to 1
+   * - Preserves original openedAt timestamp
+   * 
+   * @param electionPositionId - ID of the position to force complete/reopen
+   * @param reason - Admin reason for the override
+   * @param shouldReopen - If true, reopens for revote; if false, marks completed
+   */
   async forceCompletePosition(electionPositionId: number, reason: string, shouldReopen: boolean = false): Promise<void> {
     console.log(`[ADMIN OVERRIDE] Forcing completion of position ${electionPositionId}. Reason: ${reason}. Reopen: ${shouldReopen}`);
     
@@ -203,6 +251,7 @@ export class D1Storage implements IStorage {
     if (shouldReopen) {
       console.log(`[ADMIN OVERRIDE] Clearing votes and winners for position ${electionPositionId} to reopen (preserving candidates)`);
       
+      // Clear all votes for this position (all scrutiny rounds)
       await this.db
         .delete(schema.votes)
         .where(and(
@@ -210,6 +259,7 @@ export class D1Storage implements IStorage {
           eq(schema.votes.positionId, position.positionId)
         ));
 
+      // Clear any winners for this position
       await this.db
         .delete(schema.electionWinners)
         .where(and(
@@ -217,6 +267,7 @@ export class D1Storage implements IStorage {
           eq(schema.electionWinners.positionId, position.positionId)
         ));
 
+      // Reopen the position
       const originalOpenedAt = position.openedAt || new Date().toISOString();
       await this.db
         .update(schema.electionPositions)
@@ -224,12 +275,19 @@ export class D1Storage implements IStorage {
           status: 'open',
           currentScrutiny: 1,
           openedAt: originalOpenedAt,
-          closedAt: null
+          closedAt: null,
+          // presentCountSnapshot will be updated by createAttendanceSnapshot below
         })
         .where(eq(schema.electionPositions.id, electionPositionId));
 
-      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} reopened for revote (votes/winners cleared, candidates preserved, status='open', original openedAt preserved)`);
+      // CRITICAL: Recreate attendance snapshot with CURRENT attendance
+      // This is important because attendance may have changed since position was first opened
+      // The new snapshot ensures majority calculations use the correct attendance for the revote
+      await this.createAttendanceSnapshot(electionPositionId);
+
+      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} reopened for revote (votes/winners cleared, candidates preserved, status='open', original openedAt preserved, snapshot recreated)`);
     } else {
+      // Force complete without reopening
       await this.db
         .update(schema.electionPositions)
         .set({ 
@@ -237,6 +295,8 @@ export class D1Storage implements IStorage {
           closedAt: new Date().toISOString()
         })
         .where(eq(schema.electionPositions.id, electionPositionId));
+      
+      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} force completed`);
     }
   }
 
@@ -320,8 +380,62 @@ export class D1Storage implements IStorage {
     }
   }
 
+  /**
+   * CRITICAL: Creates an attendance snapshot for a specific position
+   * 
+   * PURPOSE:
+   * - Captures the EXACT number of members present when this position opened
+   * - Ensures majority calculations remain accurate even if attendance changes
+   * 
+   * WHEN CALLED:
+   * - Automatically by openPosition() when first position is opened
+   * - Automatically by openNextPosition() when advancing to next position
+   * - Manually by admin via forceCompletePosition() when reopening a position
+   * 
+   * WHY IT'S NEEDED:
+   * Without snapshots, if 2 members leave between Position A and Position B:
+   *   - Position A needs majority of 26 (50 present / 2 + 1)
+   *   - Position B needs majority of 25 (48 present / 2 + 1)
+   *   - Using global presentCount would incorrectly apply 25 to BOTH positions
+   * 
+   * With snapshots:
+   *   - Position A snapshot = 50, so majority = 26 (correct!)
+   *   - Position B snapshot = 48, so majority = 25 (correct!)
+   * 
+   * @param electionPositionId - ID of the electionPosition to snapshot
+   * @throws Error if electionPosition not found
+   */
   async createAttendanceSnapshot(electionPositionId: number): Promise<void> {
-    return;
+    // Get the election position to find its election
+    const electionPosition = await this.db.query.electionPositions.findFirst({
+      where: eq(schema.electionPositions.id, electionPositionId),
+    });
+
+    if (!electionPosition) {
+      throw new Error(`ElectionPosition ${electionPositionId} not found`);
+    }
+
+    // Count how many members are currently marked as present in this election
+    const presentCount = await this.db
+      .select({ count: sql<number>`count(*)` })
+      .from(schema.electionAttendance)
+      .where(
+        and(
+          eq(schema.electionAttendance.electionId, electionPosition.electionId),
+          eq(schema.electionAttendance.isPresent, true)
+        )
+      )
+      .then(result => result[0]?.count || 0);
+
+    console.log(`[SNAPSHOT] Position ${electionPositionId}: Capturing ${presentCount} present members`);
+
+    // Store the snapshot in the electionPosition record
+    await this.db
+      .update(schema.electionPositions)
+      .set({ presentCountSnapshot: presentCount })
+      .where(eq(schema.electionPositions.id, electionPositionId));
+
+    console.log(`[SNAPSHOT] Position ${electionPositionId}: Snapshot created with ${presentCount} present`);
   }
 
   async getAllCandidates(): Promise<Candidate[]> {
@@ -389,6 +503,15 @@ export class D1Storage implements IStorage {
     return !!vote;
   }
 
+  /**
+   * Gets complete election results with per-position attendance snapshots
+   * 
+   * CRITICAL: Uses presentCountSnapshot for each position instead of global presentCount
+   * This ensures majority calculations remain accurate even when attendance changes between positions
+   * 
+   * @param electionId - ID of the election
+   * @returns ElectionResults with accurate majority thresholds per position, or null if election not found
+   */
   async getElectionResults(electionId: number): Promise<ElectionResults | null> {
     const election = await this.getElectionById(electionId);
     if (!election) return null;
@@ -404,12 +527,16 @@ export class D1Storage implements IStorage {
         openedAt: schema.electionPositions.openedAt,
         closedAt: schema.electionPositions.closedAt,
         positionName: schema.positions.name,
+        // CRITICAL: Include presentCountSnapshot for per-position majority calculations
+        presentCountSnapshot: schema.electionPositions.presentCountSnapshot,
       })
       .from(schema.electionPositions)
       .leftJoin(schema.positions, eq(schema.electionPositions.positionId, schema.positions.id))
       .where(eq(schema.electionPositions.electionId, electionId))
       .orderBy(asc(schema.electionPositions.orderIndex));
 
+    // Global presentCount is now only used as fallback for old positions without snapshots
+    // and for the top-level ElectionResults metadata (not for majority calculations)
     const presentCount = await this.getPresentCount(electionId);
     const openPosition = electionPositionsRaw.find(ep => ep.status === 'open');
 
@@ -418,7 +545,7 @@ export class D1Storage implements IStorage {
       electionName: election.name,
       isActive: election.isActive,
       currentScrutiny: openPosition?.currentScrutiny || 1,
-      presentCount,
+      presentCount, // Metadata only - not used for majority calculations anymore
       createdAt: election.createdAt,
       closedAt: election.closedAt,
       positions: [],
@@ -475,7 +602,18 @@ export class D1Storage implements IStorage {
       }
 
       const totalVoters = voters.size;
-      const majorityThreshold = currentScrutiny === 3 ? 1 : Math.floor(presentCount / 2) + 1;
+      
+      // CRITICAL: Use presentCountSnapshot for THIS position (not global presentCount)
+      // This ensures majority is calculated based on attendance when position opened
+      // Fallback to global presentCount only for old positions created before snapshots
+      const snapshotCount = electionPosition.presentCountSnapshot ?? presentCount;
+      
+      // Majority calculation:
+      // - Scrutiny 1 & 2: Absolute majority (more than half of present members)
+      // - Scrutiny 3: Simple majority (most votes wins, minimum 1 vote)
+      const majorityThreshold = currentScrutiny === 3 ? 1 : Math.floor(snapshotCount / 2) + 1;
+      
+      console.log(`[RESULTS] Position ${electionPosition.positionName}: snapshot=${snapshotCount}, majority=${majorityThreshold}, scrutiny=${currentScrutiny}`);
 
       const candidatesArray = Array.from(candidateData.values()).map(c => ({
         ...c,

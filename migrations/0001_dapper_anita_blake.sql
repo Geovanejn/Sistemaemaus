@@ -1,0 +1,1 @@
+ALTER TABLE `election_positions` ADD `present_count_snapshot` integer;

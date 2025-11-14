@@ -94,6 +94,8 @@ export type InsertElectionWinner = z.infer<typeof insertElectionWinnerSchema>;
 export type ElectionWinner = typeof electionWinners.$inferSelect;
 
 // Election Positions table - tracks each position within an election sequentially
+// CRITICAL: presentCountSnapshot ensures majority calculations remain accurate
+// even when member attendance changes between positions during the same election
 export const electionPositions = sqliteTable("election_positions", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   electionId: integer("election_id").notNull().references(() => elections.id),
@@ -103,6 +105,19 @@ export const electionPositions = sqliteTable("election_positions", {
   currentScrutiny: integer("current_scrutiny").notNull().default(1),
   openedAt: text("opened_at"),
   closedAt: text("closed_at"),
+  
+  // ATTENDANCE SNAPSHOT: Number of members present when THIS specific position opened
+  // WHY: Prevents incorrect majority calculations when attendance changes between positions
+  // EXAMPLE: 
+  //   - Position A opens with 50 present (majority = 26 votes)
+  //   - During Position A voting, 2 members leave
+  //   - Position B opens with 48 present (majority = 25 votes)
+  //   - WITHOUT snapshot: Both positions would incorrectly use global presentCount
+  //   - WITH snapshot: Position A uses 50, Position B uses 48 (correct!)
+  // POPULATED: When openPosition() or openNextPosition() is called
+  // USED BY: getElectionResults() to calculate accurate majorityThreshold per position
+  presentCountSnapshot: integer("present_count_snapshot"),
+  
   createdAt: text("created_at").notNull().default(sql`(datetime('now'))`),
 });
 
