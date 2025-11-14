@@ -492,6 +492,75 @@ npx wrangler dev --local
 
 ---
 
-**Sessão 2 em andamento**  
-**Próxima ação:** Completar forceCompletePosition e integrar D1Storage
+**Sessão 2 encerrada**  
+
+---
+
+### 🔄 Sessão 3: Refinamento Completo D1Storage - Opção B (Horário: Atual)
+
+#### O Que Foi Feito
+
+**1. Refinamentos Básicos Implementados** ✅
+
+**getElectionResults:**
+- ✅ Status 'active' mudado para 'open' (linha 418)
+- ✅ N+1 queries otimizadas - carrega todos os votos de uma vez (linhas 434-452)
+- ✅ Photo URLs com fallback para Gravatar (linha 469-470)
+
+**getLatestElectionResults:**
+- ✅ Filtra apenas eleições finalizadas (isActive=false AND closedAt IS NOT NULL)
+
+**getVoterAttendance:**
+- ✅ Inclui membros ausentes via join com attendance table
+
+**forceCompletePosition:**
+- ✅ Não limpa candidatos na reabertura (preserva para revoto)
+- ✅ Status = 'open' ao invés de 'pending' 
+- ✅ Preserva openedAt original (linha 223)
+
+**2. Problema Fundamental Identificado** ⚠️
+
+**Architect Review revelou limitação crítica:**
+- ❌ Snapshots de presença por posição NÃO implementados
+- ❌ `createAttendanceSnapshot()` está vazio (retorna void)
+- ❌ `getElectionResults` usa `presentCount` global para calcular maioria
+- ❌ Isso causa winners incorretos quando presença muda entre posições
+
+**Por que snapshots são necessários:**
+```
+Cenário problemático atual:
+1. Posição A abre com 50 presentes
+2. Durante votação da Posição A, 2 membros saem (agora 48 presentes)
+3. Posição B abre com 48 presentes
+4. PROBLEMA: getElectionResults calcula maioria de AMBAS usando presentCount global
+5. Resultado: maioria incorreta para Posição A (deveria ser 26, mas calcula com 25)
+```
+
+**Solução necessária:**
+- Criar snapshot de presença quando posição abre
+- Armazenar quantos estavam presentes especificamente para aquela posição
+- Usar snapshot (não presentCount global) para calcular maioria
+
+#### Próximos Passos - Decisão Necessária
+
+**Opção 1: Implementar Snapshots Agora** 
+1. Adicionar campo `presentCountSnapshot` em electionPositions
+2. Popular em `openPosition()` / `openNextPosition()`
+3. Usar snapshot em `getElectionResults` ao invés de `presentCount`
+4. **Vantagem:** Refinamento verdadeiramente completo
+5. **Desvantagem:** +1-2h de trabalho antes da integração
+
+**Opção 2: Aceitar Limitação e Integrar**
+1. Documentar que snapshots precisam ser implementados depois
+2. Integrar D1Storage no worker agora
+3. Implementar snapshots como melhoria futura
+4. **Vantagem:** Progresso mais rápido
+5. **Desvantagem:** Cálculo de maioria incorreto em edge cases
+
+**Recomendação do Architect:** Implementar snapshots ANTES da integração
+
+---
+
+**Sessão 3 pausada**  
+**Aguardando decisão do usuário:** Implementar snapshots agora (Opção 1) ou aceitar limitação (Opção 2)?
 

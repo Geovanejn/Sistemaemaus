@@ -201,7 +201,7 @@ export class D1Storage implements IStorage {
     }
 
     if (shouldReopen) {
-      console.log(`[ADMIN OVERRIDE] Clearing ALL votes, winners, and candidates for position ${electionPositionId} to reopen`);
+      console.log(`[ADMIN OVERRIDE] Clearing votes and winners for position ${electionPositionId} to reopen (preserving candidates)`);
       
       await this.db
         .delete(schema.votes)
@@ -217,19 +217,18 @@ export class D1Storage implements IStorage {
           eq(schema.electionWinners.positionId, position.positionId)
         ));
 
-      await this.clearCandidatesForPosition(position.positionId, position.electionId);
-
+      const originalOpenedAt = position.openedAt || new Date().toISOString();
       await this.db
         .update(schema.electionPositions)
         .set({ 
-          status: 'pending',
+          status: 'open',
           currentScrutiny: 1,
-          openedAt: null,
+          openedAt: originalOpenedAt,
           closedAt: null
         })
         .where(eq(schema.electionPositions.id, electionPositionId));
 
-      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} fully reset to pending for revote (all votes, winners, and candidates cleared)`);
+      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} reopened for revote (votes/winners cleared, candidates preserved, status='open', original openedAt preserved)`);
     } else {
       await this.db
         .update(schema.electionPositions)
@@ -412,13 +411,13 @@ export class D1Storage implements IStorage {
       .orderBy(asc(schema.electionPositions.orderIndex));
 
     const presentCount = await this.getPresentCount(electionId);
-    const activePosition = electionPositionsRaw.find(ep => ep.status === 'active');
+    const openPosition = electionPositionsRaw.find(ep => ep.status === 'open');
 
     const results: ElectionResults = {
       electionId: election.id,
       electionName: election.name,
       isActive: election.isActive,
-      currentScrutiny: activePosition?.currentScrutiny || 1,
+      currentScrutiny: openPosition?.currentScrutiny || 1,
       presentCount,
       createdAt: election.createdAt,
       closedAt: election.closedAt,
@@ -428,21 +427,32 @@ export class D1Storage implements IStorage {
     const winners = await this.getElectionWinners(electionId);
     const winnersMap = new Map(winners.map(w => [w.positionId, { candidateId: w.candidateId, wonAtScrutiny: w.wonAtScrutiny }]));
 
+    const allVotesWithDetails = await this.db.query.votes.findMany({
+      where: eq(schema.votes.electionId, electionId),
+      with: {
+        candidate: {
+          with: {
+            user: true,
+          },
+        },
+      },
+    });
+
+    const votesByPosition = new Map<number, typeof allVotesWithDetails>();
+    for (const vote of allVotesWithDetails) {
+      const key = vote.positionId;
+      if (!votesByPosition.has(key)) {
+        votesByPosition.set(key, []);
+      }
+      votesByPosition.get(key)!.push(vote);
+    }
+
     for (const electionPosition of electionPositionsRaw) {
       const currentScrutiny = electionPosition.currentScrutiny;
       const positionId = electionPosition.positionId;
-
-      const votes = await this.db.query.votes.findMany({
-        where: and(
-          eq(schema.votes.electionId, electionId),
-          eq(schema.votes.positionId, positionId),
-          eq(schema.votes.scrutinyRound, currentScrutiny)
-        ),
-        with: {
-          candidate: true,
-          voter: true,
-        },
-      });
+      
+      const positionVotes = votesByPosition.get(positionId) || [];
+      const votes = positionVotes.filter(v => v.scrutinyRound === currentScrutiny);
 
       const candidateVotes = new Map<number, number>();
       const candidateData = new Map<number, any>();
@@ -453,11 +463,13 @@ export class D1Storage implements IStorage {
         candidateVotes.set(candidateId, (candidateVotes.get(candidateId) || 0) + 1);
         voters.add(vote.voterId);
         if (!candidateData.has(candidateId)) {
+          const photoUrl = vote.candidate.user?.photoUrl || 
+            await schema.getGravatarUrl(vote.candidate.email);
           candidateData.set(candidateId, {
             candidateId,
             candidateName: vote.candidate.name,
             candidateEmail: vote.candidate.email,
-            photoUrl: "",
+            photoUrl,
           });
         }
       }
@@ -492,7 +504,7 @@ export class D1Storage implements IStorage {
             winnerId = topCandidate.candidateId;
             winnerScrutiny = 3;
           }
-        } else if (currentScrutiny < 3 && electionPosition.status === 'active') {
+        } else if (currentScrutiny < 3 && electionPosition.status === 'open') {
           needsNextScrutiny = true;
         }
       }
@@ -525,6 +537,10 @@ export class D1Storage implements IStorage {
 
   async getLatestElectionResults(): Promise<ElectionResults | null> {
     const elections = await this.db.query.elections.findMany({
+      where: and(
+        eq(schema.elections.isActive, false),
+        sql`${schema.elections.closedAt} IS NOT NULL`
+      ),
       orderBy: [desc(schema.elections.createdAt)],
       limit: 1,
     });
@@ -550,6 +566,14 @@ export class D1Storage implements IStorage {
   }
 
   async getVoterAttendance(electionId: number): Promise<Array<any>> {
+    const attendance = await this.db.query.electionAttendance.findMany({
+      where: eq(schema.electionAttendance.electionId, electionId),
+      with: {
+        member: true,
+      },
+      orderBy: [asc(schema.users.fullName)],
+    });
+
     const votesWithUsers = await this.db.query.votes.findMany({
       where: eq(schema.votes.electionId, electionId),
       with: {
@@ -563,9 +587,6 @@ export class D1Storage implements IStorage {
       const voterId = vote.voter.id;
       if (!voterMap.has(voterId)) {
         voterMap.set(voterId, {
-          voterId,
-          voterName: vote.voter.fullName,
-          voterEmail: vote.voter.email,
           firstVoteAt: vote.createdAt,
           totalVotes: 0,
         });
@@ -577,9 +598,14 @@ export class D1Storage implements IStorage {
       }
     }
 
-    return Array.from(voterMap.values()).sort((a, b) => 
-      a.voterName.localeCompare(b.voterName)
-    );
+    return attendance.map(att => ({
+      voterId: att.member.id,
+      voterName: att.member.fullName,
+      voterEmail: att.member.email,
+      isPresent: att.isPresent,
+      firstVoteAt: voterMap.get(att.member.id)?.firstVoteAt || null,
+      totalVotes: voterMap.get(att.member.id)?.totalVotes || 0,
+    })).sort((a, b) => a.voterName.localeCompare(b.voterName));
   }
 
   async getVoteTimeline(electionId: number): Promise<Array<any>> {
