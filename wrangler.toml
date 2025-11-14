@@ -55,10 +55,17 @@ RESEND_FROM_EMAIL = "noreply@emausvota.com.br"
 # SESSION_SECRET - String aleatória para JWT (min 32 caracteres)
 
 # ============================================
+# Static Assets (Frontend)
+# ============================================
+[assets]
+directory = "./dist/public"
+binding = "ASSETS"
+
+# ============================================
 # Configurações de Build
 # ============================================
 [build]
-command = "npm run build:worker"
+command = "npm run build && npm run build:worker"
 
 # ============================================
 # Limites (Plano Gratuito)
