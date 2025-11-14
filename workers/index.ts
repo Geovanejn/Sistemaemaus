@@ -5,6 +5,11 @@ import { R2Storage } from './storage/r2-storage';
 import { createAuthRoutes } from './routes/auth';
 import { createAdminRoutes } from './routes/admin';
 import { createElectionsRoutes } from './routes/elections';
+import { createPositionsRoutes } from './routes/positions';
+import { createCandidatesRoutes, createCandidatesByPositionRoutes } from './routes/candidates';
+import { createVotesRoutes } from './routes/votes';
+import { createResultsRoutes, createWinnersRoutes } from './routes/results';
+import { createAuditRoutes } from './routes/audit';
 
 const app = new Hono<AuthContext>();
 
@@ -55,8 +60,25 @@ createAuthRoutes(app);
 // Register admin routes (protected by admin middleware)
 createAdminRoutes(app);
 
-// Register elections routes (includes attendance - protected by admin middleware)
+// Register elections routes (CRUD + attendance - protected by auth + admin checks)
 createElectionsRoutes(app);
+
+// Register positions routes (position management - protected by auth + admin checks)
+createPositionsRoutes(app);
+
+// Register candidates routes (candidate management - protected by auth + admin checks)
+createCandidatesRoutes(app);
+createCandidatesByPositionRoutes(app);
+
+// Register votes routes (voting system - protected by auth)
+createVotesRoutes(app);
+
+// Register results routes (election results - protected by auth)
+createResultsRoutes(app);
+createWinnersRoutes(app);
+
+// Register audit routes (audit data and PDF verification - protected by auth + admin checks)
+createAuditRoutes(app);
 
 export default app;
 

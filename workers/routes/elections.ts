@@ -10,7 +10,14 @@ import { createAuthMiddleware } from '../auth';
  * ATENÇÃO: Montado em /api/elections (SEM /admin prefix) para compatibilidade
  * com clientes existentes, MAS ainda protegido por admin middleware
  * 
- * Rotas:
+ * Rotas CRUD:
+ * - POST   /api/elections - Criar eleição (ADMIN)
+ * - PATCH  /api/elections/:id/close - Encerrar eleição (ADMIN)
+ * - POST   /api/elections/:id/finalize - Finalizar eleição (ADMIN)
+ * - GET    /api/elections/history - Histórico eleições (ADMIN)
+ * - GET    /api/elections/active - Eleição ativa (autenticado)
+ * 
+ * Rotas Attendance:
  * - GET    /api/elections/:id/attendance - Lista presença (ADMIN)
  * - POST   /api/elections/:id/attendance/initialize - Inicializar (ADMIN)
  * - PATCH  /api/elections/:id/attendance/:memberId - Atualizar presença (ADMIN)
@@ -31,6 +38,128 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   
   // 2. Authentication SEGUNDO (todas rotas precisam auth)
   electionsRouter.use('/*', createAuthMiddleware());
+  
+  // ========================================
+  // ELECTIONS CRUD ROUTES
+  // ========================================
+  
+  // POST /api/elections - Criar eleição (ADMIN)
+  electionsRouter.post('/', async (c) => {
+    const user = c.get('user');
+    if (!user?.isAdmin) {
+      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    }
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const { name } = await c.req.json();
+      
+      if (!name || typeof name !== 'string') {
+        return c.json({ message: 'Nome da eleição é obrigatório' }, 400);
+      }
+      
+      const election = await storage.createElection(name);
+      return c.json(election, 201);
+    } catch (error) {
+      console.error('[Elections] Error creating election:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao criar eleição' 
+      }, 400);
+    }
+  });
+  
+  // PATCH /api/elections/:id/close - Encerrar eleição (ADMIN)
+  electionsRouter.patch('/:id/close', async (c) => {
+    const user = c.get('user');
+    if (!user?.isAdmin) {
+      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    }
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const electionId = parseInt(c.req.param('id'));
+      
+      const election = await storage.getElectionById(electionId);
+      if (!election) {
+        return c.json({ message: 'Eleição não encontrada' }, 404);
+      }
+      
+      await storage.closeElection(electionId);
+      return c.json({ message: 'Eleição encerrada com sucesso' });
+    } catch (error) {
+      console.error('[Elections] Error closing election:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao encerrar eleição' 
+      }, 400);
+    }
+  });
+  
+  // POST /api/elections/:id/finalize - Finalizar eleição (ADMIN)
+  electionsRouter.post('/:id/finalize', async (c) => {
+    const user = c.get('user');
+    if (!user?.isAdmin) {
+      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    }
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const electionId = parseInt(c.req.param('id'));
+      
+      const election = await storage.getElectionById(electionId);
+      if (!election) {
+        return c.json({ message: 'Eleição não encontrada' }, 404);
+      }
+      
+      const positions = await storage.getElectionPositions(electionId);
+      const allCompleted = positions.every(p => p.status === 'completed');
+      
+      if (!allCompleted) {
+        return c.json({ message: 'Todos os cargos devem estar decididos antes de finalizar a eleição' }, 400);
+      }
+      
+      await storage.finalizeElection(electionId);
+      return c.json({ message: 'Eleição finalizada com sucesso' });
+    } catch (error) {
+      console.error('[Elections] Error finalizing election:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao finalizar eleição' 
+      }, 400);
+    }
+  });
+  
+  // GET /api/elections/history - Histórico (ADMIN)
+  electionsRouter.get('/history', async (c) => {
+    const user = c.get('user');
+    if (!user?.isAdmin) {
+      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    }
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const history = await storage.getElectionHistory();
+      return c.json(history);
+    } catch (error) {
+      console.error('[Elections] Error getting history:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao buscar histórico de eleições' 
+      }, 500);
+    }
+  });
+  
+  // GET /api/elections/active - Eleição ativa (qualquer autenticado)
+  electionsRouter.get('/active', async (c) => {
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const activeElection = await storage.getActiveElection();
+      
+      if (!activeElection) {
+        return c.json({ message: 'Nenhuma eleição ativa no momento' }, 404);
+      }
+      
+      return c.json(activeElection);
+    } catch (error) {
+      console.error('[Elections] Error getting active election:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao buscar eleição ativa' 
+      }, 500);
+    }
+  });
   
   // ========================================
   // ATTENDANCE ROUTES
