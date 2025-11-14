@@ -173,49 +173,69 @@ export class D1Storage implements IStorage {
     const next = all[completed.length];
     if (!next) return null;
 
-    // Open the position first
+    // OPÇÃO D: Fully atomic UPDATE with subquery that retrieves electionId inline
+    // This eliminates ALL race conditions by doing everything in a single SQL statement
+    const openedAt = new Date().toISOString();
+    
     await this.db
       .update(schema.electionPositions)
-      .set({ 
+      .set({
         status: 'open',
-        openedAt: new Date().toISOString()
+        openedAt: openedAt,
+        presentCountSnapshot: sql<number>`(
+          SELECT COUNT(*) 
+          FROM ${schema.electionAttendance}
+          WHERE ${schema.electionAttendance.electionId} = (
+            SELECT ${schema.electionPositions.electionId}
+            FROM ${schema.electionPositions}
+            WHERE ${schema.electionPositions.id} = ${next.id}
+          )
+          AND ${schema.electionAttendance.isPresent} = true
+        )`,
       })
       .where(eq(schema.electionPositions.id, next.id));
 
-    // CRITICAL: Create attendance snapshot immediately after opening
-    // This captures how many members are present RIGHT NOW for THIS position
-    // Even if members leave/arrive later, this position's majority will be calculated
-    // based on the attendance at the moment it opened
-    await this.createAttendanceSnapshot(next.id);
+    console.log(`[ATOMIC SNAPSHOT] Position ${next.id} opened with fully atomic snapshot via openNextPosition (no race conditions)`);
 
     return await this.getElectionPositionById(next.id);
   }
 
   /**
    * Opens a specific position (typically the first one in an election)
-   * CRITICAL: Creates attendance snapshot to capture current present count
+   * OPÇÃO D - ATOMIC: Creates attendance snapshot INSIDE the UPDATE using subquery
+   * This eliminates race conditions by making the operation atomic
    * 
    * @param electionPositionId - ID of the position to open
    * @returns The opened position
    * @throws Error if position not found
    */
   async openPosition(electionPositionId: number): Promise<ElectionPosition> {
+    // OPÇÃO D: Fully atomic UPDATE with subquery that also retrieves electionId
+    // This eliminates ALL race conditions by doing everything in a single SQL statement
+    const openedAt = new Date().toISOString();
+    
     await this.db
       .update(schema.electionPositions)
-      .set({ 
+      .set({
         status: 'open',
-        openedAt: new Date().toISOString()
+        openedAt: openedAt,
+        presentCountSnapshot: sql<number>`(
+          SELECT COUNT(*) 
+          FROM ${schema.electionAttendance}
+          WHERE ${schema.electionAttendance.electionId} = (
+            SELECT ${schema.electionPositions.electionId}
+            FROM ${schema.electionPositions}
+            WHERE ${schema.electionPositions.id} = ${electionPositionId}
+          )
+          AND ${schema.electionAttendance.isPresent} = true
+        )`,
       })
       .where(eq(schema.electionPositions.id, electionPositionId));
 
-    // CRITICAL: Create attendance snapshot immediately after opening
-    // This captures how many members are present RIGHT NOW for THIS position
-    // Even if members leave/arrive later, this position's majority will be calculated
-    // based on the attendance at the moment it opened
-    await this.createAttendanceSnapshot(electionPositionId);
+    console.log(`[ATOMIC SNAPSHOT] Position ${electionPositionId} opened with fully atomic snapshot (no race conditions)`);
 
     const result = await this.getElectionPositionById(electionPositionId);
-    if (!result) throw new Error('Position not found');
+    if (!result) throw new Error('Position not found after opening');
     return result;
   }
 
@@ -267,25 +287,31 @@ export class D1Storage implements IStorage {
           eq(schema.electionWinners.positionId, position.positionId)
         ));
 
-      // Reopen the position
+      // OPÇÃO D: Fully atomic reopen with subquery that retrieves electionId inline
+      // This eliminates ALL race conditions by doing everything in a single SQL statement
       const originalOpenedAt = position.openedAt || new Date().toISOString();
+      
       await this.db
         .update(schema.electionPositions)
-        .set({ 
+        .set({
           status: 'open',
           currentScrutiny: 1,
           openedAt: originalOpenedAt,
           closedAt: null,
-          // presentCountSnapshot will be updated by createAttendanceSnapshot below
+          presentCountSnapshot: sql<number>`(
+            SELECT COUNT(*) 
+            FROM ${schema.electionAttendance}
+            WHERE ${schema.electionAttendance.electionId} = (
+              SELECT ${schema.electionPositions.electionId}
+              FROM ${schema.electionPositions}
+              WHERE ${schema.electionPositions.id} = ${electionPositionId}
+            )
+            AND ${schema.electionAttendance.isPresent} = true
+          )`,
         })
         .where(eq(schema.electionPositions.id, electionPositionId));
 
-      // CRITICAL: Recreate attendance snapshot with CURRENT attendance
-      // This is important because attendance may have changed since position was first opened
-      // The new snapshot ensures majority calculations use the correct attendance for the revote
-      await this.createAttendanceSnapshot(electionPositionId);
-
-      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} reopened for revote (votes/winners cleared, candidates preserved, status='open', original openedAt preserved, snapshot recreated)`);
+      console.log(`[ADMIN OVERRIDE] Position ${electionPositionId} reopened with fully atomic snapshot for revote (votes/winners cleared, candidates preserved, no race conditions)`);
     } else {
       // Force complete without reopening
       await this.db
@@ -381,62 +407,17 @@ export class D1Storage implements IStorage {
   }
 
   /**
-   * CRITICAL: Creates an attendance snapshot for a specific position
+   * DEPRECATED - REMOVED IN OPÇÃO D IMPLEMENTATION
    * 
-   * PURPOSE:
-   * - Captures the EXACT number of members present when this position opened
-   * - Ensures majority calculations remain accurate even if attendance changes
+   * Previously created attendance snapshots in separate operations (race condition).
+   * Now replaced by atomic UPDATE queries with inline subqueries in:
+   * - openPosition() - lines ~220-232
+   * - openNextPosition() - lines ~183-195
+   * - forceCompletePosition() - lines ~298-312
    * 
-   * WHEN CALLED:
-   * - Automatically by openPosition() when first position is opened
-   * - Automatically by openNextPosition() when advancing to next position
-   * - Manually by admin via forceCompletePosition() when reopening a position
-   * 
-   * WHY IT'S NEEDED:
-   * Without snapshots, if 2 members leave between Position A and Position B:
-   *   - Position A needs majority of 26 (50 present / 2 + 1)
-   *   - Position B needs majority of 25 (48 present / 2 + 1)
-   *   - Using global presentCount would incorrectly apply 25 to BOTH positions
-   * 
-   * With snapshots:
-   *   - Position A snapshot = 50, so majority = 26 (correct!)
-   *   - Position B snapshot = 48, so majority = 25 (correct!)
-   * 
-   * @param electionPositionId - ID of the electionPosition to snapshot
-   * @throws Error if electionPosition not found
+   * OPÇÃO D eliminates race conditions by computing snapshots atomically
+   * inside the same SQL UPDATE statement that opens the position.
    */
-  async createAttendanceSnapshot(electionPositionId: number): Promise<void> {
-    // Get the election position to find its election
-    const electionPosition = await this.db.query.electionPositions.findFirst({
-      where: eq(schema.electionPositions.id, electionPositionId),
-    });
-
-    if (!electionPosition) {
-      throw new Error(`ElectionPosition ${electionPositionId} not found`);
-    }
-
-    // Count how many members are currently marked as present in this election
-    const presentCount = await this.db
-      .select({ count: sql<number>`count(*)` })
-      .from(schema.electionAttendance)
-      .where(
-        and(
-          eq(schema.electionAttendance.electionId, electionPosition.electionId),
-          eq(schema.electionAttendance.isPresent, true)
-        )
-      )
-      .then(result => result[0]?.count || 0);
-
-    console.log(`[SNAPSHOT] Position ${electionPositionId}: Capturing ${presentCount} present members`);
-
-    // Store the snapshot in the electionPosition record
-    await this.db
-      .update(schema.electionPositions)
-      .set({ presentCountSnapshot: presentCount })
-      .where(eq(schema.electionPositions.id, electionPositionId));
-
-    console.log(`[SNAPSHOT] Position ${electionPositionId}: Snapshot created with ${presentCount} present`);
-  }
 
   async getAllCandidates(): Promise<Candidate[]> {
     return await this.db.query.candidates.findMany();

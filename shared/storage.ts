@@ -50,7 +50,7 @@ export interface IStorage {
   isMemberPresent(electionId: number, memberId: number): Promise<boolean>;
   setMemberAttendance(electionId: number, memberId: number, isPresent: boolean): Promise<void>;
   initializeAttendance(electionId: number): Promise<void>;
-  createAttendanceSnapshot(electionPositionId: number): Promise<void>;
+  // createAttendanceSnapshot REMOVED - OPÇÃO D implementation uses atomic SQL instead
   
   getAllCandidates(): Promise<Candidate[]>;
   getCandidatesByElection(electionId: number): Promise<CandidateWithDetails[]>;
