@@ -721,7 +721,111 @@ candidates preserved, status='open', original openedAt preserved, snapshot recre
 
 ---
 
-**Sessão 3 completa - Aguardando review do Architect**
+### 🚨 CORREÇÃO CRÍTICA: Eliminação de Race Conditions (Opção D - Versão Final)
+
+**Data:** 14/11/2025  
+**Status:** ✅ **IMPLEMENTADO E VALIDADO PELO ARCHITECT**
+
+#### Problema Identificado
+
+A implementação inicial com `createAttendanceSnapshot()` tinha **race conditions críticos**:
+
+```typescript
+// ❌ PROBLEMA: Duas operações separadas (não atômicas)
+async openPosition(id: number) {
+  await db.update(...).set({ status: 'open' })  // 1. UPDATE status
+  await createAttendanceSnapshot(id)             // 2. SELECT COUNT + UPDATE snapshot
+  // 🚨 Presença pode mudar ENTRE essas duas operações!
+}
+```
+
+**Cenário de falha:**
+1. Thread A: UPDATE status='open' (completa)
+2. Thread B: setMemberAttendance() marca 2 membros ausentes
+3. Thread A: SELECT COUNT (conta presença APÓS mudança)
+4. Thread A: UPDATE presentCountSnapshot (snapshot incorreto!)
+
+#### Solução Implementada: Opção D (Totalmente Atômica)
+
+**Princípio:** Uma ÚNICA query SQL UPDATE com subquery aninhada.
+
+**Implementação final:**
+
+```typescript
+async openPosition(electionPositionId: number): Promise<ElectionPosition> {
+  // OPÇÃO D: Fully atomic UPDATE with nested subqueries
+  // No prior SELECT needed - everything in one SQL statement
+  const openedAt = new Date().toISOString();
+  
+  await this.db
+    .update(schema.electionPositions)
+    .set({
+      status: 'open',
+      openedAt: openedAt,
+      presentCountSnapshot: sql<number>`(
+        SELECT COUNT(*) 
+        FROM ${schema.electionAttendance}
+        WHERE ${schema.electionAttendance.electionId} = (
+          SELECT ${schema.electionPositions.electionId}
+          FROM ${schema.electionPositions}
+          WHERE ${schema.electionPositions.id} = ${electionPositionId}
+        )
+        AND ${schema.electionAttendance.isPresent} = true
+      )`,
+    })
+    .where(eq(schema.electionPositions.id, electionPositionId));
+
+  // ✅ Status + openedAt + snapshot atualizados ATOMICAMENTE
+  // ✅ Nenhuma race condition possível
+}
+```
+
+**Métodos atualizados (todos com mesma abordagem atômica):**
+1. ✅ `openPosition()` - linhas 211-239
+2. ✅ `openNextPosition()` - linhas 176-203
+3. ✅ `forceCompletePosition()` (ao reabrir) - linhas 293-317
+
+**Método removido:**
+- ❌ `createAttendanceSnapshot()` - não mais necessário (substituído por subquery inline)
+
+#### Garantias Atômicas
+
+**Por que funciona:**
+1. **SQLite/D1 garante atomicidade** do UPDATE com subqueries
+2. **Nenhum SELECT prévio** - electionId obtido via subquery aninhada
+3. **Operação única** - impossível interleaving com setMemberAttendance()
+4. **Drizzle type-safety** - usando `.update().set()` com `sql<number>`
+
+**Validação do Architect:**
+> "SQLite/D1 executes each statement atomically, so concurrent attendance mutations cannot interleave between COUNT and assignment."
+
+#### Comparação de Abordagens
+
+| Aspecto | Antes (createAttendanceSnapshot) | Depois (Opção D) |
+|---------|----------------------------------|------------------|
+| Queries SQL | 3 (SELECT position + SELECT COUNT + UPDATE) | 1 (UPDATE com subquery) |
+| Atomicidade | ❌ Race condition | ✅ Totalmente atômico |
+| Round-trips DB | 3 | 1 |
+| Type-safety | ✅ Drizzle | ✅ Drizzle com sql<number> |
+| Performance | Mais lenta | Mais rápida |
+
+#### Logs Atualizados
+
+```
+[ATOMIC SNAPSHOT] Position 1 opened with fully atomic snapshot (no race conditions)
+[ATOMIC SNAPSHOT] Position 2 opened with fully atomic snapshot via openNextPosition (no race conditions)
+[ADMIN OVERRIDE] Position 1 reopened with fully atomic snapshot for revote (votes/winners cleared, candidates preserved, no race conditions)
+```
+
+#### Próximos Passos Recomendados
+
+1. **Testes de regressão:** Simular attendance toggles concorrentes durante abertura
+2. **Monitoramento D1:** Verificar logs em produção para validar comportamento sob carga
+3. **Documentação:** Manter este diário atualizado com garantias atômicas
+
+---
+
+**Sessão 3 completa - ✅ Race conditions eliminados, implementação validada pelo Architect**
 
 ---
 
