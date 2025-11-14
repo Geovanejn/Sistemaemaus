@@ -1,9 +1,10 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import type { Env } from './types';
+import type { Env, AuthContext } from './types';
 import { R2Storage } from './storage/r2-storage';
+import { createAuthRoutes } from './routes/auth';
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<AuthContext>();
 
 app.use('/*', cors({
   origin: '*',
@@ -45,6 +46,9 @@ app.get('/photos/*', async (c) => {
   const r2Storage = new R2Storage(c.env.STORAGE);
   return await r2Storage.servePhoto(c, key);
 });
+
+// Register authentication routes
+createAuthRoutes(app);
 
 export default app;
 

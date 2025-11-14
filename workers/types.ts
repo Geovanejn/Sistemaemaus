@@ -14,3 +14,26 @@ export interface SessionUser {
   fullName: string;
   isAdmin: boolean;
 }
+
+/**
+ * JWT payload structure
+ */
+export interface JWTPayload {
+  id: number;
+  email: string;
+  isAdmin: boolean;
+  isMember: boolean;
+  exp: number; // Expiration timestamp (seconds)
+}
+
+/**
+ * Hono context type with authentication support
+ * Includes both environment bindings and user variable
+ * Note: user is optional as not all routes require authentication
+ */
+export type AuthContext = {
+  Bindings: Env;
+  Variables: {
+    user?: JWTPayload;
+  };
+}
