@@ -18,15 +18,8 @@ app.use('/*', cors({
   credentials: true,
 }));
 
-app.get('/', (c) => {
-  return c.json({
-    message: 'Emaús Vota API - Cloudflare Workers',
-    status: 'online',
-    timestamp: new Date().toISOString(),
-  });
-});
-
-app.get('/health', (c) => {
+// API health endpoint
+app.get('/api/health', (c) => {
   return c.json({
     status: 'healthy',
     database: 'connected',
@@ -79,6 +72,27 @@ createWinnersRoutes(app);
 
 // Register audit routes (audit data and PDF verification - protected by auth + admin checks)
 createAuditRoutes(app);
+
+// ============================================
+// Static Assets - Frontend SPA
+// ============================================
+// Serve all non-API routes from static assets
+// This enables client-side routing for the React SPA
+app.get('*', async (c) => {
+  // Get the asset from ASSETS binding
+  const url = new URL(c.req.url);
+  const assetResponse = await c.env.ASSETS.fetch(url);
+  
+  // If asset exists, serve it
+  if (assetResponse.status === 200) {
+    return assetResponse;
+  }
+  
+  // For 404s, serve index.html to enable SPA routing
+  const indexUrl = new URL(url);
+  indexUrl.pathname = '/index.html';
+  return c.env.ASSETS.fetch(indexUrl);
+});
 
 export default app;
 

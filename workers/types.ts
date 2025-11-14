@@ -1,8 +1,14 @@
 import type { D1Database, R2Bucket } from '@cloudflare/workers-types';
 
+// Fetcher type for Assets binding
+interface Fetcher {
+  fetch(request: Request | string): Promise<Response>;
+}
+
 export interface Env {
   DB: D1Database;
   STORAGE: R2Bucket;
+  ASSETS: Fetcher;
   RESEND_API_KEY: string;
   SESSION_SECRET: string;
   RESEND_FROM_EMAIL: string;
