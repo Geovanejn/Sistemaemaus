@@ -5,10 +5,17 @@
   "license": "MIT",
   "scripts": {
     "dev": "NODE_ENV=development tsx server/index.ts",
+    "dev:worker": "wrangler dev",
     "build": "vite build && esbuild server/index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
+    "build:worker": "esbuild workers/index.ts --bundle --format=esm --outdir=dist-worker --external:cloudflare:*",
     "start": "NODE_ENV=production node dist/index.js",
+    "deploy": "wrangler deploy",
     "check": "tsc",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "db:migrate": "wrangler d1 migrations apply emaus-vota-db",
+    "db:migrate:local": "wrangler d1 migrations apply emaus-vota-db --local",
+    "db:studio": "drizzle-kit studio",
+    "test:scheduled": "wrangler dev --test-scheduled"
   },
   "dependencies": {
     "@cloudflare/workers-types": "^4.20251113.0",

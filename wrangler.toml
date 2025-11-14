@@ -1,0 +1,61 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "emaus-vota"
+main = "workers/index.ts"
+compatibility_date = "2024-11-14"
+compatibility_flags = ["nodejs_compat"]
+
+# ============================================
+# D1 Database Binding
+# ============================================
+# IMPORTANTE: Você precisa criar o database primeiro!
+# Comando: npx wrangler d1 create emaus-vota-db
+# Depois, cole o database_id abaixo
+[[d1_databases]]
+binding = "DB"
+database_name = "emaus-vota-db"
+database_id = "SUBSTITUA_PELO_SEU_DATABASE_ID"  # ⚠️ SUBSTITUIR após criar o database!
+migrations_dir = "./migrations"
+
+# ============================================
+# R2 Storage Binding (Fotos)
+# ============================================
+# IMPORTANTE: Você precisa criar o bucket primeiro!
+# Comando: npx wrangler r2 bucket create emaus-vota-storage
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "emaus-vota-storage"
+preview_bucket_name = "emaus-vota-storage-local"  # Bucket separado para dev local
+
+# ============================================
+# Cron Trigger - Birthday Emails
+# ============================================
+# Executa diariamente às 7h UTC (4h BRT / 3h BRST)
+# Para testar localmente: npx wrangler dev --test-scheduled
+[triggers]
+crons = ["0 7 * * *"]
+
+# ============================================
+# Variáveis de Ambiente
+# ============================================
+[vars]
+ENVIRONMENT = "production"
+RESEND_FROM_EMAIL = "noreply@seudominio.com"  # ⚠️ SUBSTITUIR pelo seu email Resend
+
+# ============================================
+# Secrets (Configurar com: npx wrangler secret put <NAME>)
+# ============================================
+# RESEND_API_KEY - Sua chave da API Resend
+# SESSION_SECRET - String aleatória para JWT (min 32 caracteres)
+
+# ============================================
+# Configurações de Build
+# ============================================
+[build]
+command = "npm run build:worker"
+
+# ============================================
+# Limites (Plano Gratuito)
+# ============================================
+# CPU: 10ms por requisição
+# Memória: 128MB
+# Requisições: 100.000/dia
