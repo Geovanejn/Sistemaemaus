@@ -172,6 +172,49 @@ INSTRUCOES_CLOUDFLARE_SETUP.md
 
 ---
 
+### ⏰ 16:00 - Instalação de Dependências
+
+**Status**: Concluído
+
+**Ações realizadas**:
+- ✅ Instalado hono@4.10.5 (produção)
+- ✅ Instalado wrangler@4.48.0 (desenvolvimento)
+- ✅ Instalado @cloudflare/workers-types@4.20251113.0
+- ✅ Instalado drizzle-kit@0.31.7
+- ✅ Verificado drizzle-orm@0.39.1 (já instalado)
+- ✅ Atualizado .gitignore com diretórios Cloudflare
+
+**Comandos executados**:
+```bash
+npm install hono
+npm install --save-dev wrangler @cloudflare/workers-types drizzle-kit@latest @types/node@latest
+npm list hono wrangler @cloudflare/workers-types drizzle-kit drizzle-orm
+npx wrangler --version  # 4.48.0
+```
+
+**Arquivos modificados**:
+- package.json (adicionadas dependências)
+- .gitignore (adicionados .wrangler/, .dev.vars, .mf/, dist-worker/)
+
+**Decisões técnicas**:
+- Usar apenas `hono` (não @hono/node-server - Node.js only)
+- Wrangler 4.48.0 é a versão mais recente
+- @cloudflare/workers-types garante tipos corretos para Workers runtime
+
+**Verificação**:
+```bash
+✅ hono@4.10.5 instalado
+✅ wrangler@4.48.0 instalado e funcional
+✅ @cloudflare/workers-types@4.20251113.0
+✅ drizzle-kit@0.31.7
+✅ drizzle-orm@0.39.1
+✅ .gitignore atualizado
+```
+
+**Próxima tarefa**: #3 - Configurar wrangler.toml
+
+---
+
 ## 📊 Progresso Geral
 
 ```
