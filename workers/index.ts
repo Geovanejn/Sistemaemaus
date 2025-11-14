@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import type { Env } from './types';
+import { R2Storage } from './storage/r2-storage';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -23,6 +24,26 @@ app.get('/health', (c) => {
     database: 'connected',
     storage: 'connected',
   });
+});
+
+/**
+ * Rota para servir fotos do R2
+ * 
+ * GET /photos/{key} - Serve foto com cache headers apropriados
+ * 
+ * @example
+ * GET /photos/photos/1-1731609234567.jpg
+ * Returns: JPEG image com cache de 1 ano
+ */
+app.get('/photos/*', async (c) => {
+  const key = c.req.param('*');
+  
+  if (!key) {
+    return c.json({ error: 'Photo key is required' }, 400);
+  }
+  
+  const r2Storage = new R2Storage(c.env.STORAGE);
+  return await r2Storage.servePhoto(c, key);
 });
 
 export default app;
