@@ -35,11 +35,11 @@ preview_bucket_name = "emaus-vota-storage-local"  # Bucket separado para dev loc
 crons = ["0 7 * * *"]
 
 # ============================================
-# Custom Domain
+# Custom Domain (configurar manualmente no Dashboard)
 # ============================================
-[[routes]]
-pattern = "emausvota.com.br"
-custom_domain = true
+# [[routes]]
+# pattern = "emausvota.com.br"
+# custom_domain = true
 
 # ============================================
 # Variáveis de Ambiente
