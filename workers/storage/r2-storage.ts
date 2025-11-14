@@ -59,9 +59,18 @@ export class R2Storage {
     contentType: string
   ): Promise<string> {
     try {
-      // Gerar key única: photos/{userId}-{timestamp}.jpg
+      // Validar MIME type suportado
+      const supportedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+      if (!supportedTypes.includes(contentType.toLowerCase())) {
+        throw new Error(`Unsupported image format: ${contentType}. Supported formats: ${supportedTypes.join(', ')}`);
+      }
+      
+      // Gerar key única: photos/{userId}-{timestamp}.{ext}
       const timestamp = Date.now();
-      const extension = contentType === 'image/png' ? 'png' : 'jpg';
+      let extension = 'jpg';
+      if (contentType === 'image/png') extension = 'png';
+      else if (contentType === 'image/webp') extension = 'webp';
+      
       const key = `photos/${userId}-${timestamp}.${extension}`;
       
       console.log(`[R2] Uploading photo: ${key} (${fileData.byteLength} bytes, ${contentType})`);
@@ -117,7 +126,8 @@ export class R2Storage {
       return object;
     } catch (error) {
       console.error(`[R2] ❌ Error getting photo ${key}:`, error);
-      return null;
+      // Rejeitar com erro tipado para upstream handlers distinguirem 404s de erros transientes
+      throw new Error(`Failed to get photo: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -220,14 +230,18 @@ export class R2Storage {
 
     // Retornar foto com headers apropriados
     // Cast necessário pois ReadableStream do Workers é compatível mas type não match
-    return new Response(object.body as any, {
-      headers: {
-        'Content-Type': object.httpMetadata?.contentType || 'image/jpeg',
-        'Cache-Control': 'public, max-age=31536000, immutable', // Cache 1 ano (fotos não mudam)
-        'ETag': object.etag || '',
-        'Content-Length': object.size.toString(),
-      },
-    });
+    const headers: Record<string, string> = {
+      'Content-Type': object.httpMetadata?.contentType || 'image/jpeg',
+      'Cache-Control': 'public, max-age=31536000, immutable', // Cache 1 ano (fotos não mudam)
+      'Content-Length': object.size.toString(),
+    };
+    
+    // Omitir ETag header quando undefined (não enviar header vazio)
+    if (object.etag) {
+      headers['ETag'] = object.etag;
+    }
+    
+    return new Response(object.body as any, { headers });
   }
   
   /**
