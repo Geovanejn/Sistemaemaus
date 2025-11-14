@@ -126,8 +126,8 @@ export class R2Storage {
       return object;
     } catch (error) {
       console.error(`[R2] ❌ Error getting photo ${key}:`, error);
-      // Rejeitar com erro tipado para upstream handlers distinguirem 404s de erros transientes
-      throw new Error(`Failed to get photo: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Rethrow erro original para upstream handlers distinguirem 404s de erros transientes
+      throw error;
     }
   }
 

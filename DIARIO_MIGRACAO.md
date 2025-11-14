@@ -1155,14 +1155,39 @@ if (object.etag) {
 }
 ```
 
-3. **Tratamento de Erros Tipado** ✅
+3. **Tratamento de Erros Corrigido** ✅
+
+**Primeira Implementação (INCORRETA):**
 ```typescript
 catch (error) {
-  console.error(`[R2] ❌ Error getting photo ${key}:`, error);
-  // Rejeitar com erro tipado para upstream handlers
+  // ❌ ERRADO: Cria novo erro genérico, perde tipo original
   throw new Error(`Failed to get photo: ${error instanceof Error ? error.message : 'Unknown error'}`);
 }
 ```
+
+**Correção Final (CORRETA):**
+```typescript
+catch (error) {
+  console.error(`[R2] ❌ Error getting photo ${key}:`, error);
+  // ✅ CORRETO: Rethrow erro original preserva tipo/causa
+  throw error;
+}
+```
+
+**Por que a correção foi necessária:**
+- Criar novo Error genérico impede upstream handlers de distinguir erros
+- Rethrow do erro original preserva identidade e permite inspeção de tipo/causa
+- Callers podem agora distinguir 404s (null) de erros transientes (throw)
+
+**4. Review Final do Architect** ✅
+
+**Resultado:** ✅ **APROVADO - Todas as 3 melhorias corretas**
+
+**Confirmação do Architect:**
+- getPhoto agora faz rethrow do erro original
+- Callers podem distinguir falhas transientes de retornos null (404)
+- Sem regressões detectadas
+- R2Storage pronto para testes
 
 **4. Documentação Inline** ✅
 
