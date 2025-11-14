@@ -58,23 +58,33 @@ export class R2Storage {
     fileData: ArrayBuffer, 
     contentType: string
   ): Promise<string> {
+    // Validar MIME type suportado (validação client-side)
+    const supportedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!supportedTypes.includes(contentType.toLowerCase())) {
+      throw new Error(`Unsupported image format: ${contentType}. Supported formats: ${supportedTypes.join(', ')}`);
+    }
+    
+    // Validar tamanho máximo (10MB - limite Workers)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (fileData.byteLength > MAX_FILE_SIZE) {
+      throw new Error(`File too large: ${(fileData.byteLength / 1024 / 1024).toFixed(2)}MB. Maximum allowed: 10MB`);
+    }
+    
+    if (fileData.byteLength === 0) {
+      throw new Error('File is empty');
+    }
+    
+    // Gerar key única: photos/{userId}-{timestamp}.{ext}
+    const timestamp = Date.now();
+    let extension = 'jpg';
+    if (contentType === 'image/png') extension = 'png';
+    else if (contentType === 'image/webp') extension = 'webp';
+    
+    const key = `photos/${userId}-${timestamp}.${extension}`;
+    
+    console.log(`[R2] Uploading photo: ${key} (${(fileData.byteLength / 1024).toFixed(2)}KB, ${contentType})`);
+    
     try {
-      // Validar MIME type suportado
-      const supportedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-      if (!supportedTypes.includes(contentType.toLowerCase())) {
-        throw new Error(`Unsupported image format: ${contentType}. Supported formats: ${supportedTypes.join(', ')}`);
-      }
-      
-      // Gerar key única: photos/{userId}-{timestamp}.{ext}
-      const timestamp = Date.now();
-      let extension = 'jpg';
-      if (contentType === 'image/png') extension = 'png';
-      else if (contentType === 'image/webp') extension = 'webp';
-      
-      const key = `photos/${userId}-${timestamp}.${extension}`;
-      
-      console.log(`[R2] Uploading photo: ${key} (${fileData.byteLength} bytes, ${contentType})`);
-      
       // ✅ CORRETO: Usar binding nativo R2
       // Método put() do R2Bucket aceita ArrayBuffer diretamente
       await this.bucket.put(key, fileData, {
@@ -90,8 +100,9 @@ export class R2Storage {
       console.log(`[R2] ✅ Photo uploaded successfully: ${key}`);
       return key;
     } catch (error) {
-      console.error('[R2] ❌ Error uploading photo:', error);
-      throw new Error(`Failed to upload photo: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Erros do R2 (storage failure) - 500
+      console.error('[R2] ❌ Error uploading to R2:', error);
+      throw new Error(`Failed to upload photo to storage: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   }
 
@@ -214,34 +225,51 @@ export class R2Storage {
    * @returns Response com a foto ou 404
    */
   async servePhoto(c: Context, key: string): Promise<Response> {
-    const object = await this.bucket.get(key);
-    
-    if (!object) {
-      console.log(`[R2] Photo not found for serving: ${key}`);
-      return new Response(JSON.stringify({ error: 'Photo not found' }), { 
-        status: 404,
+    try {
+      const object = await this.bucket.get(key);
+      
+      if (!object) {
+        console.log(`[R2] Photo not found for serving: ${key}`);
+        return new Response(JSON.stringify({ error: 'Photo not found' }), { 
+          status: 404,
+          headers: { 
+            'Content-Type': 'application/json',
+            'Cache-Control': 'no-store', // ✅ NÃO cachear erros 404
+          },
+        });
+      }
+
+      console.log(`[R2] Serving photo: ${key} (${object.size} bytes)`);
+
+      // R2ObjectBody já tem body como ReadableStream
+      const headers: Record<string, string> = {
+        'Content-Type': object.httpMetadata?.contentType || 'image/jpeg',
+        'Cache-Control': 'public, max-age=31536000, immutable', // Cache 1 ano (fotos não mudam)
+        'Content-Length': object.size.toString(),
+      };
+      
+      // Adicionar ETag se disponível (para validação de cache)
+      if (object.etag) {
+        headers['ETag'] = object.etag;
+      }
+      
+      // object.body já é ReadableStream, compatível com Response
+      return new Response(object.body, { headers });
+    } catch (error) {
+      console.error(`[R2] ❌ Error serving photo ${key}:`, error);
+      
+      // Retornar 500 com cache headers apropriados
+      return new Response(JSON.stringify({ 
+        error: 'Failed to serve photo',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      }), { 
+        status: 500,
         headers: { 
           'Content-Type': 'application/json',
+          'Cache-Control': 'no-store', // ✅ NÃO cachear erros 500
         },
       });
     }
-
-    console.log(`[R2] Serving photo: ${key} (${object.size} bytes)`);
-
-    // Retornar foto com headers apropriados
-    // Cast necessário pois ReadableStream do Workers é compatível mas type não match
-    const headers: Record<string, string> = {
-      'Content-Type': object.httpMetadata?.contentType || 'image/jpeg',
-      'Cache-Control': 'public, max-age=31536000, immutable', // Cache 1 ano (fotos não mudam)
-      'Content-Length': object.size.toString(),
-    };
-    
-    // Omitir ETag header quando undefined (não enviar header vazio)
-    if (object.etag) {
-      headers['ETag'] = object.etag;
-    }
-    
-    return new Response(object.body as any, { headers });
   }
   
   /**
