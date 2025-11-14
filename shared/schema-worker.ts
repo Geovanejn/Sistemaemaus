@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, relations } from "drizzle-orm";
 import { sqliteTable, integer, text, unique } from "drizzle-orm/sqlite-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
@@ -207,6 +207,71 @@ export const insertPdfVerificationSchema = createInsertSchema(pdfVerifications).
 
 export type InsertPdfVerification = z.infer<typeof insertPdfVerificationSchema>;
 export type PdfVerification = typeof pdfVerifications.$inferSelect;
+
+// Relations
+export const candidatesRelations = relations(candidates, ({ one }) => ({
+  user: one(users, {
+    fields: [candidates.userId],
+    references: [users.id],
+  }),
+  position: one(positions, {
+    fields: [candidates.positionId],
+    references: [positions.id],
+  }),
+  election: one(elections, {
+    fields: [candidates.electionId],
+    references: [elections.id],
+  }),
+}));
+
+export const electionWinnersRelations = relations(electionWinners, ({ one }) => ({
+  candidate: one(candidates, {
+    fields: [electionWinners.candidateId],
+    references: [candidates.id],
+  }),
+  position: one(positions, {
+    fields: [electionWinners.positionId],
+    references: [positions.id],
+  }),
+  election: one(elections, {
+    fields: [electionWinners.electionId],
+    references: [elections.id],
+  }),
+}));
+
+export const electionAttendanceRelations = relations(electionAttendance, ({ one }) => ({
+  member: one(users, {
+    fields: [electionAttendance.memberId],
+    references: [users.id],
+  }),
+  election: one(elections, {
+    fields: [electionAttendance.electionId],
+    references: [elections.id],
+  }),
+  electionPosition: one(electionPositions, {
+    fields: [electionAttendance.electionPositionId],
+    references: [electionPositions.id],
+  }),
+}));
+
+export const votesRelations = relations(votes, ({ one }) => ({
+  voter: one(users, {
+    fields: [votes.voterId],
+    references: [users.id],
+  }),
+  candidate: one(candidates, {
+    fields: [votes.candidateId],
+    references: [candidates.id],
+  }),
+  position: one(positions, {
+    fields: [votes.positionId],
+    references: [positions.id],
+  }),
+  election: one(elections, {
+    fields: [votes.electionId],
+    references: [elections.id],
+  }),
+}));
 
 // Auth schemas
 export const requestCodeSchema = z.object({

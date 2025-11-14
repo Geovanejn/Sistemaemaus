@@ -1,0 +1,450 @@
+import { drizzle, type DrizzleD1Database } from 'drizzle-orm/d1';
+import { eq, and, desc, asc, sql } from 'drizzle-orm';
+import * as schema from '../../shared/schema-worker';
+import type { IStorage, User, InsertUser, Position, Election, Candidate, InsertCandidate, Vote, InsertVote, VerificationCode, InsertVerificationCode, CandidateWithDetails, ElectionResults, ElectionPosition, ElectionAttendance } from '../../shared/storage';
+import type { D1Database } from '@cloudflare/workers-types';
+
+export class D1Storage implements IStorage {
+  private readonly db: DrizzleD1Database<typeof schema>;
+
+  constructor(d1: D1Database) {
+    this.db = drizzle(d1, { schema });
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    const result = await this.db.query.users.findFirst({
+      where: eq(schema.users.email, email),
+    });
+    return result;
+  }
+
+  async getUserById(id: number): Promise<User | undefined> {
+    const result = await this.db.query.users.findFirst({
+      where: eq(schema.users.id, id),
+    });
+    return result;
+  }
+
+  async createUser(user: InsertUser): Promise<User> {
+    const result = await this.db.insert(schema.users).values(user).returning();
+    return result[0];
+  }
+
+  async updateUser(id: number, updates: Partial<Omit<User, 'id'>>): Promise<User | undefined> {
+    const result = await this.db
+      .update(schema.users)
+      .set(updates)
+      .where(eq(schema.users.id, id))
+      .returning();
+    return result[0];
+  }
+
+  async getAllMembers(excludeAdmins: boolean = false): Promise<User[]> {
+    const whereClause = excludeAdmins 
+      ? and(eq(schema.users.isMember, true), eq(schema.users.isAdmin, false))
+      : eq(schema.users.isMember, true);
+    
+    return await this.db.query.users.findMany({
+      where: whereClause,
+      orderBy: [asc(schema.users.fullName)],
+    });
+  }
+
+  async deleteMember(id: number): Promise<void> {
+    await this.db.delete(schema.users).where(eq(schema.users.id, id));
+  }
+
+  async getAllPositions(): Promise<Position[]> {
+    return await this.db.query.positions.findMany({
+      orderBy: [asc(schema.positions.name)],
+    });
+  }
+
+  async getActiveElection(): Promise<Election | null> {
+    const result = await this.db.query.elections.findFirst({
+      where: and(
+        eq(schema.elections.isActive, true),
+        sql`${schema.elections.closedAt} IS NULL`
+      ),
+    });
+    return result || null;
+  }
+
+  async getElectionById(id: number): Promise<Election | undefined> {
+    return await this.db.query.elections.findFirst({
+      where: eq(schema.elections.id, id),
+    });
+  }
+
+  async createElection(name: string): Promise<Election> {
+    const result = await this.db.insert(schema.elections).values({
+      name,
+    }).returning();
+    return result[0];
+  }
+
+  async closeElection(id: number): Promise<void> {
+    await this.db
+      .update(schema.elections)
+      .set({ closedAt: new Date().toISOString() })
+      .where(eq(schema.elections.id, id));
+  }
+
+  async finalizeElection(id: number): Promise<void> {
+    await this.db
+      .update(schema.elections)
+      .set({ 
+        isActive: false,
+        closedAt: new Date().toISOString()
+      })
+      .where(eq(schema.elections.id, id));
+  }
+
+  async getElectionHistory(): Promise<Election[]> {
+    return await this.db.query.elections.findMany({
+      orderBy: [desc(schema.elections.createdAt)],
+    });
+  }
+
+  async setWinner(electionId: number, candidateId: number, positionId: number, scrutiny: number): Promise<void> {
+    await this.db.insert(schema.electionWinners).values({
+      electionId,
+      candidateId,
+      positionId,
+      wonAtScrutiny: scrutiny,
+    });
+  }
+
+  async getElectionPositions(electionId: number): Promise<ElectionPosition[]> {
+    return await this.db.query.electionPositions.findMany({
+      where: eq(schema.electionPositions.electionId, electionId),
+      orderBy: [asc(schema.electionPositions.orderIndex)],
+    });
+  }
+
+  async getActiveElectionPosition(electionId: number): Promise<ElectionPosition | null> {
+    const result = await this.db.query.electionPositions.findFirst({
+      where: and(
+        eq(schema.electionPositions.electionId, electionId),
+        eq(schema.electionPositions.status, 'open')
+      ),
+    });
+    return result || null;
+  }
+
+  async getElectionPositionById(id: number): Promise<ElectionPosition | null> {
+    const result = await this.db.query.electionPositions.findFirst({
+      where: eq(schema.electionPositions.id, id),
+    });
+    return result || null;
+  }
+
+  async advancePositionScrutiny(electionPositionId: number): Promise<void> {
+    const position = await this.getElectionPositionById(electionPositionId);
+    if (!position) throw new Error('Position not found');
+
+    const newScrutiny = position.currentScrutiny + 1;
+    await this.db
+      .update(schema.electionPositions)
+      .set({ currentScrutiny: newScrutiny })
+      .where(eq(schema.electionPositions.id, electionPositionId));
+  }
+
+  async openNextPosition(electionId: number): Promise<ElectionPosition | null> {
+    const completed = await this.db.query.electionPositions.findMany({
+      where: and(
+        eq(schema.electionPositions.electionId, electionId),
+        eq(schema.electionPositions.status, 'completed')
+      ),
+    });
+
+    const all = await this.db.query.electionPositions.findMany({
+      where: eq(schema.electionPositions.electionId, electionId),
+      orderBy: [asc(schema.electionPositions.orderIndex)],
+    });
+
+    const next = all[completed.length];
+    if (!next) return null;
+
+    await this.db
+      .update(schema.electionPositions)
+      .set({ status: 'open' })
+      .where(eq(schema.electionPositions.id, next.id));
+
+    return await this.getElectionPositionById(next.id);
+  }
+
+  async openPosition(electionPositionId: number): Promise<ElectionPosition> {
+    await this.db
+      .update(schema.electionPositions)
+      .set({ status: 'open' })
+      .where(eq(schema.electionPositions.id, electionPositionId));
+
+    const result = await this.getElectionPositionById(electionPositionId);
+    if (!result) throw new Error('Position not found');
+    return result;
+  }
+
+  async completePosition(electionPositionId: number): Promise<void> {
+    await this.db
+      .update(schema.electionPositions)
+      .set({ status: 'completed' })
+      .where(eq(schema.electionPositions.id, electionPositionId));
+  }
+
+  async forceCompletePosition(electionPositionId: number, reason: string, shouldReopen: boolean = false): Promise<void> {
+    console.log(`[ADMIN OVERRIDE] Forcing completion of position ${electionPositionId}. Reason: ${reason}. Reopen: ${shouldReopen}`);
+    
+    const position = await this.getElectionPositionById(electionPositionId);
+    if (!position) {
+      throw new Error("Cargo não encontrado");
+    }
+
+    if (shouldReopen) {
+      await this.db
+        .update(schema.electionPositions)
+        .set({ 
+          status: 'open',
+          currentScrutiny: 1,
+          openedAt: new Date().toISOString()
+        })
+        .where(eq(schema.electionPositions.id, electionPositionId));
+    } else {
+      await this.db
+        .update(schema.electionPositions)
+        .set({ 
+          status: 'completed',
+          closedAt: new Date().toISOString()
+        })
+        .where(eq(schema.electionPositions.id, electionPositionId));
+    }
+  }
+
+  async getElectionAttendance(electionId: number): Promise<ElectionAttendance[]> {
+    return await this.db.query.electionAttendance.findMany({
+      where: eq(schema.electionAttendance.electionId, electionId),
+    });
+  }
+
+  async getPresentCount(electionId: number): Promise<number> {
+    const attendance = await this.db.query.electionAttendance.findMany({
+      where: and(
+        eq(schema.electionAttendance.electionId, electionId),
+        eq(schema.electionAttendance.isPresent, true)
+      ),
+    });
+    return attendance.length;
+  }
+
+  async getPresentCountForPosition(electionPositionId: number): Promise<number> {
+    const position = await this.getElectionPositionById(electionPositionId);
+    if (!position) return 0;
+    
+    return this.getPresentCount(position.electionId);
+  }
+
+  async isMemberPresent(electionId: number, memberId: number): Promise<boolean> {
+    const attendance = await this.db.query.electionAttendance.findFirst({
+      where: and(
+        eq(schema.electionAttendance.electionId, electionId),
+        eq(schema.electionAttendance.memberId, memberId)
+      ),
+    });
+    return attendance?.isPresent || false;
+  }
+
+  async setMemberAttendance(electionId: number, memberId: number, isPresent: boolean): Promise<void> {
+    const existing = await this.db.query.electionAttendance.findFirst({
+      where: and(
+        eq(schema.electionAttendance.electionId, electionId),
+        eq(schema.electionAttendance.memberId, memberId)
+      ),
+    });
+
+    if (existing) {
+      await this.db
+        .update(schema.electionAttendance)
+        .set({ isPresent })
+        .where(and(
+          eq(schema.electionAttendance.electionId, electionId),
+          eq(schema.electionAttendance.memberId, memberId)
+        ));
+    } else {
+      await this.db.insert(schema.electionAttendance).values({
+        electionId,
+        memberId,
+        isPresent,
+      });
+    }
+  }
+
+  async initializeAttendance(electionId: number): Promise<void> {
+    const members = await this.getAllMembers();
+    const activeMembers = members.filter(m => m.activeMember);
+    
+    for (const member of activeMembers) {
+      const existing = await this.db.query.electionAttendance.findFirst({
+        where: and(
+          eq(schema.electionAttendance.electionId, electionId),
+          eq(schema.electionAttendance.memberId, member.id)
+        ),
+      });
+      
+      if (!existing) {
+        await this.db.insert(schema.electionAttendance).values({
+          electionId,
+          memberId: member.id,
+          isPresent: false,
+        });
+      }
+    }
+  }
+
+  async createAttendanceSnapshot(electionPositionId: number): Promise<void> {
+    return;
+  }
+
+  async getAllCandidates(): Promise<Candidate[]> {
+    return await this.db.query.candidates.findMany();
+  }
+
+  async getCandidatesByElection(electionId: number): Promise<CandidateWithDetails[]> {
+    const candidatesWithRelations = await this.db.query.candidates.findMany({
+      where: eq(schema.candidates.electionId, electionId),
+      with: {
+        user: true,
+        position: true,
+        election: true,
+      },
+    });
+
+    return candidatesWithRelations.map(c => {
+      const { user, position, election, ...candidate } = c;
+      return {
+        ...candidate,
+        positionName: position.name,
+        electionName: election.name,
+        photoUrl: user.photoUrl || undefined,
+      };
+    });
+  }
+
+  async getCandidatesByPosition(positionId: number, electionId: number): Promise<Candidate[]> {
+    return await this.db.query.candidates.findMany({
+      where: and(
+        eq(schema.candidates.positionId, positionId),
+        eq(schema.candidates.electionId, electionId)
+      ),
+    });
+  }
+
+  async createCandidate(candidate: InsertCandidate): Promise<Candidate> {
+    const result = await this.db.insert(schema.candidates).values(candidate).returning();
+    return result[0];
+  }
+
+  async clearCandidatesForPosition(positionId: number, electionId: number): Promise<void> {
+    await this.db
+      .delete(schema.candidates)
+      .where(and(
+        eq(schema.candidates.positionId, positionId),
+        eq(schema.candidates.electionId, electionId)
+      ));
+  }
+
+  async createVote(vote: InsertVote): Promise<Vote> {
+    const result = await this.db.insert(schema.votes).values(vote).returning();
+    return result[0];
+  }
+
+  async hasUserVoted(voterId: number, positionId: number, electionId: number, scrutinyRound: number): Promise<boolean> {
+    const vote = await this.db.query.votes.findFirst({
+      where: and(
+        eq(schema.votes.voterId, voterId),
+        eq(schema.votes.positionId, positionId),
+        eq(schema.votes.electionId, electionId),
+        eq(schema.votes.scrutinyRound, scrutinyRound)
+      ),
+    });
+    return !!vote;
+  }
+
+  async getElectionResults(electionId: number): Promise<ElectionResults | null> {
+    throw new Error('Not implemented yet');
+  }
+
+  async getLatestElectionResults(): Promise<ElectionResults | null> {
+    throw new Error('Not implemented yet');
+  }
+
+  async getElectionWinners(electionId: number): Promise<Array<{ userId: number; positionId: number; candidateId: number; wonAtScrutiny: number }>> {
+    const winnersWithCandidate = await this.db.query.electionWinners.findMany({
+      where: eq(schema.electionWinners.electionId, electionId),
+      with: {
+        candidate: true,
+      },
+    });
+
+    return winnersWithCandidate.map(w => ({
+      userId: w.candidate.userId,
+      positionId: w.positionId,
+      candidateId: w.candidateId,
+      wonAtScrutiny: w.wonAtScrutiny,
+    }));
+  }
+
+  async getVoterAttendance(electionId: number): Promise<Array<any>> {
+    throw new Error('Not implemented yet');
+  }
+
+  async getVoteTimeline(electionId: number): Promise<Array<any>> {
+    throw new Error('Not implemented yet');
+  }
+
+  async getElectionAuditData(electionId: number): Promise<any | null> {
+    throw new Error('Not implemented yet');
+  }
+
+  async createVerificationCode(data: InsertVerificationCode): Promise<VerificationCode> {
+    const result = await this.db.insert(schema.verificationCodes).values({
+      ...data,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    }).returning();
+    return result[0];
+  }
+
+  async getValidVerificationCode(email: string, code: string): Promise<VerificationCode | null> {
+    const now = new Date().toISOString();
+    const result = await this.db.query.verificationCodes.findFirst({
+      where: and(
+        eq(schema.verificationCodes.email, email),
+        eq(schema.verificationCodes.code, code),
+        sql`${schema.verificationCodes.expiresAt} > ${now}`
+      ),
+    });
+    return result || null;
+  }
+
+  async deleteVerificationCodesByEmail(email: string): Promise<void> {
+    await this.db
+      .delete(schema.verificationCodes)
+      .where(eq(schema.verificationCodes.email, email));
+  }
+
+  async createPdfVerification(electionId: number, verificationHash: string, presidentName?: string): Promise<any> {
+    const result = await this.db.insert(schema.pdfVerifications).values({
+      electionId,
+      verificationHash,
+      presidentName,
+    }).returning();
+    return result[0];
+  }
+
+  async getPdfVerification(verificationHash: string): Promise<any | null> {
+    const result = await this.db.query.pdfVerifications.findFirst({
+      where: eq(schema.pdfVerifications.verificationHash, verificationHash),
+    });
+    return result || null;
+  }
+}
