@@ -315,3 +315,4 @@ Para mais informações sobre Cloudflare Workers:
 - [Documentação do Wrangler](https://developers.cloudflare.com/workers/wrangler/)
 - [Documentação do D1](https://developers.cloudflare.com/d1/)
 - [Documentação do R2](https://developers.cloudflare.com/r2/)
+.
