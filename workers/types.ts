@@ -35,5 +35,7 @@ export type AuthContext = {
   Bindings: Env;
   Variables: {
     user?: JWTPayload;
+    d1Storage?: any; // D1Storage instance (injected in admin routes)
+    r2Storage?: any; // R2Storage instance (injected in admin routes)
   };
 }

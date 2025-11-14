@@ -3,6 +3,8 @@ import { cors } from 'hono/cors';
 import type { Env, AuthContext } from './types';
 import { R2Storage } from './storage/r2-storage';
 import { createAuthRoutes } from './routes/auth';
+import { createAdminRoutes } from './routes/admin';
+import { createElectionsRoutes } from './routes/elections';
 
 const app = new Hono<AuthContext>();
 
@@ -49,6 +51,12 @@ app.get('/photos/*', async (c) => {
 
 // Register authentication routes
 createAuthRoutes(app);
+
+// Register admin routes (protected by admin middleware)
+createAdminRoutes(app);
+
+// Register elections routes (includes attendance - protected by admin middleware)
+createElectionsRoutes(app);
 
 export default app;
 
