@@ -1,375 +1,340 @@
-# 📝 Diário de Migração - Emaús Vota → Cloudflare
+# Diário de Migração - Emaús Vota
 
-Este documento registra **cronologicamente** todos os passos, decisões, problemas e soluções da migração do sistema Emaús Vota do Render para Cloudflare Workers.
-
----
-
-## 🎯 Objetivo da Migração
-
-**Problema**: Sistema hospedado no Render (plano gratuito) adormece após inatividade e **apaga todos os dados** periodicamente.
-
-**Solução**: Migrar para Cloudflare Workers com:
-- **D1 Database**: Banco de dados SQL persistente (10GB grátis)
-- **R2 Storage**: Armazenamento de fotos (10GB grátis)
-- **Cron Triggers**: Agendador de tarefas
-- **Sempre online**: Sem adormecer, sem perda de dados
-
----
-
-## 📅 Dia 1 - 2024-11-14
-
-### ⏰ 13:53 - Início do Projeto
-**Status**: Análise inicial do projeto
-
-**Ações realizadas**:
-- ✅ Análise completa do código atual
-- ✅ Identificação da arquitetura atual (Express.js + Better-SQLite3/PostgreSQL)
-- ✅ Mapeamento de todas as funcionalidades do sistema
-
-**Descobertas**:
-```
-Sistema Atual:
-- Backend: Express.js + Node.js
-- Database Dev: Better-SQLite3 (data/emaus-vota.db)
-- Database Prod: PostgreSQL/Neon
-- Storage: File System (fotos em /uploads)
-- Scheduler: node-cron (birthday emails às 7h BRT)
-- Email: Resend API
-- Auth: JWT + express-session
-
-Funcionalidades principais:
-1. Autenticação (email + senha)
-2. Gerenciamento de membros
-3. Criação de eleições
-4. Sistema de votação (3 escrutínios)
-5. Geração de PDFs
-6. Upload de fotos
-7. Envio automático de emails de aniversário
-```
-
-**Análise de compatibilidade**:
-| Componente | Cloudflare Workers | Status | Ação Necessária |
-|------------|-------------------|--------|-----------------|
-| Express.js | ❌ Não compatível | 🔄 Migrar | Usar Hono framework |
-| Better-SQLite3 | ❌ Não compatível | 🔄 Migrar | Usar D1 Database |
-| PostgreSQL/Neon | ❌ Não necessário | 🔄 Migrar | Usar D1 Database |
-| File System | ❌ Não disponível | 🔄 Migrar | Usar R2 Storage |
-| node-cron | ❌ Não compatível | 🔄 Migrar | Usar Cron Triggers |
-| crypto (Node) | ⚠️ Incompatível | 🔄 Adaptar | Usar Web Crypto API |
-| Resend API | ✅ Compatível | ✅ Manter | fetch API funciona |
-| JWT | ✅ Compatível | 🔄 Adaptar | Usar Web Crypto |
-
----
-
-### ⏰ 14:30 - Criação da Documentação Base
-
-**Ações realizadas**:
-- ✅ Criado `INSTRUCOES_CLOUDFLARE_SETUP.md` (guia completo de setup)
-- ✅ Criado `DIARIO_MIGRACAO.md` (este arquivo)
-- ✅ Definido plano de migração com 15 tarefas
-
-**Estrutura da documentação**:
-```
-INSTRUCOES_CLOUDFLARE_SETUP.md
-├── Visão Geral
-├── Arquitetura da Solução
-├── Pré-requisitos
-├── Configuração da Conta
-├── Instalação de Dependências
-├── Estrutura do Projeto
-├── Configuração do Wrangler
-├── Migração do Schema
-├── Implementação do Backend
-├── Migração de Dados
-├── Testes Locais
-├── Deploy para Produção
-└── Troubleshooting
-```
-
-**Plano de migração definido**:
-1. ✅ Criar documentação completa
-2. ⏳ Instalar dependências Cloudflare
-3. ⏳ Configurar wrangler.toml
-4. ⏳ Criar schema adaptado para Workers
-5. ⏳ Implementar D1Storage
-6. ⏳ Implementar R2Storage
-7. ⏳ Criar entry point do Worker
-8. ⏳ Converter rotas para Hono
-9. ⏳ Implementar autenticação JWT
-10. ⏳ Converter scheduler para Cron
-11. ⏳ Script de migração de dados
-12. ⏳ Migrar fotos para R2
-13. ⏳ Testes locais
-14. ⏳ Deploy produção
-15. ⏳ Validação completa
-
-**Decisões técnicas**:
-- Framework backend: **Hono** (leve, rápido, TypeScript-first)
-- Database: **D1** (SQLite-compatível, 10GB grátis)
-- Storage: **R2** (S3-compatível, 10GB grátis)
-- ORM: **Drizzle** (já usado no projeto, suporta D1)
-
----
-
-### ⏰ 15:00 - Criação de Critérios de Aceitação
-
-**Ações realizadas**:
-- ✅ Criado `TAREFAS_MIGRACAO.md` com critérios detalhados
-- ✅ Definido pré-requisitos e dependências entre tarefas
-- ✅ Adicionado comandos de verificação para cada tarefa
-- ✅ Incluído exemplos de código para cada etapa
-
-**Decisões técnicas**:
-- Cada tarefa tem critérios claros de aceitação (checklist)
-- Comandos de verificação incluídos para validação
-- Ordem de execução respeitando dependências
-
----
-
-### ⏰ 15:30 - Correção de Bloqueadores Críticos
-
-**Problemas encontrados**:
-1. ❌ **AWS SDK**: @aws-sdk/client-s3 NÃO funciona em Workers
-2. ❌ **@hono/node-server**: Pacote Node.js only, incompatível com Workers
-
-**Soluções aplicadas**:
-- ✅ Removido @aws-sdk/* das dependências
-- ✅ Removido @hono/node-server das dependências
-- ✅ Implementado R2Storage usando binding nativo (env.STORAGE.put/get/delete)
-- ✅ Adicionado código COMPLETO e copy-paste ready para R2Storage
-- ✅ Criado checklist obrigatório com 6 testes de verificação R2
-
-**Código implementado**:
-- R2Storage class completa (190 linhas)
-- Métodos: uploadPhoto, getPhoto, deletePhoto, getPhotoUrl, servePhoto, listPhotos
-- Exemplos de uso correto vs. incorreto
-- Error handling e logging
-
-**Decisões técnicas**:
-- **USAR**: Apenas `hono` (não @hono/node-server)
-- **USAR**: R2 binding nativo via `env.STORAGE`
-- **NÃO USAR**: AWS SDK, bcryptjs, jsonwebtoken (usar Web Crypto API)
-
-**Verificação**:
-```bash
-# Código completo verificado em:
-# INSTRUCOES_CLOUDFLARE_SETUP.md (linhas 445-641)
-# TAREFAS_MIGRACAO.md (Tarefa 6)
-```
-
----
-
-### ✅ Tarefa 1 CONCLUÍDA
-
-**Resumo**:
-- 3 arquivos de documentação criados (602+ linhas total)
-- Código completo e copy-paste ready para R2Storage
-- Checklist obrigatório com 6 testes de verificação
-- Templates estruturados para diário
-- Todos os bloqueadores críticos resolvidos
-
-**Próxima tarefa**: #2 - Instalar Dependências
-
----
-
-### ⏰ 16:00 - Instalação de Dependências
-
-**Status**: Concluído
-
-**Ações realizadas**:
-- ✅ Instalado hono@4.10.5 (produção)
-- ✅ Instalado wrangler@4.48.0 (desenvolvimento)
-- ✅ Instalado @cloudflare/workers-types@4.20251113.0
-- ✅ Instalado drizzle-kit@0.31.7
-- ✅ Verificado drizzle-orm@0.39.1 (já instalado)
-- ✅ Atualizado .gitignore com diretórios Cloudflare
-
-**Comandos executados**:
-```bash
-npm install hono
-npm install --save-dev wrangler @cloudflare/workers-types drizzle-kit@latest @types/node@latest
-npm list hono wrangler @cloudflare/workers-types drizzle-kit drizzle-orm
-npx wrangler --version  # 4.48.0
-```
-
-**Arquivos modificados**:
-- package.json (adicionadas dependências)
-- .gitignore (adicionados .wrangler/, .dev.vars, .mf/, dist-worker/)
-
-**Decisões técnicas**:
-- Usar apenas `hono` (não @hono/node-server - Node.js only)
-- Wrangler 4.48.0 é a versão mais recente
-- @cloudflare/workers-types garante tipos corretos para Workers runtime
-
-**Verificação**:
-```bash
-✅ hono@4.10.5 instalado
-✅ wrangler@4.48.0 instalado e funcional
-✅ @cloudflare/workers-types@4.20251113.0
-✅ drizzle-kit@0.31.7
-✅ drizzle-orm@0.39.1
-✅ .gitignore atualizado
-```
-
-**Próxima tarefa**: #3 - Configurar wrangler.toml
+Este documento registra o progresso diário da migração do sistema Emaús Vota do Render para o Cloudflare Workers.
 
 ---
 
 ## 📊 Progresso Geral
 
+**Status:** 🟡 Em Progresso  
+**Tarefas Concluídas:** 4/11 (36%)  
+**Próxima Milestone:** D1Storage e R2Storage
+
 ```
-[██░░░░░░░░░░░░░] 2/15 tarefas (13.3%)
-
-✅ Concluídas: 2
-⏳ Em progresso: 0
-⏸️ Pendentes: 13
-❌ Bloqueadas: 0
+Infraestrutura  ████████████████████ 100%
+Schema Worker   ████████████████████ 100%
+Migrations D1   ████████████████████ 100%
+Worker Entry    ████████████████████ 100%
+D1 Storage      ████░░░░░░░░░░░░░░░░  20%
+R2 Storage      ░░░░░░░░░░░░░░░░░░░░   0%
+Rotas API       ░░░░░░░░░░░░░░░░░░░░   0%
+Cron Jobs       ░░░░░░░░░░░░░░░░░░░░   0%
+Deploy          ░░░░░░░░░░░░░░░░░░░░   0%
 ```
 
-**Última atualização**: 2024-11-14 16:05  
-**Tempo total**: ~1 hora  
-**Próxima ação**: Configurar wrangler.toml
-
 ---
 
-## 🐛 Problemas Encontrados e Soluções
+## 📅 14 de Novembro de 2025
 
-### ❌ Problema 1: AWS SDK em Workers
-**Descrição**: Documentação inicial incluía @aws-sdk/client-s3 que não funciona em Workers  
-**Causa**: Confusão sobre runtime - AWS SDK requer Node.js  
-**Solução**: Usar R2 binding nativo (env.STORAGE.put/get/delete)  
-**Prevenção**: Sempre verificar compatibilidade com Workers runtime  
-**Status**: ✅ Resolvido
+### ✅ Sessão 1: Configuração Automática da Infraestrutura (11:44 - 15:15)
 
-### ❌ Problema 2: @hono/node-server em Workers
-**Descrição**: Pacote @hono/node-server incluído incorretamente  
-**Causa**: Não é necessário em Workers - apenas para Node.js  
-**Solução**: Usar apenas `hono` puro + `wrangler deploy`  
-**Prevenção**: Revisar dependências específicas do runtime  
-**Status**: ✅ Resolvido
+#### O Que Foi Feito
 
----
+**1. Autenticação Cloudflare** ✅
+- Usuário criou API Token com permissões corretas:
+  - Workers Scripts → Edit
+  - D1 → Edit
+  - Workers R2 Storage → Edit
+- Secrets configurados no Replit:
+  - `CLOUDFLARE_API_TOKEN`
+  - `CLOUDFLARE_ACCOUNT_ID`
+  - `RESEND_API_KEY`
 
-## 💡 Lições Aprendidas
+**2. Recursos Cloudflare Criados** ✅
 
-1. **Documentação é essencial**: Criar documentação detalhada ANTES de começar evita retrabalho
-2. **Análise completa**: Mapear todas as incompatibilidades antes de migrar
-3. **Plano estruturado**: 15 tarefas bem definidas com critérios de aceitação claros
-4. **Critérios de aceitação**: Cada tarefa tem checklist e comandos de verificação
-5. **Dependências explícitas**: Pré-requisitos claros evitam bloqueios
-
----
-
-## 📋 Template para Novas Entradas
-
-Use este template ao adicionar novas entradas no diário:
-
-```markdown
-### ⏰ [HH:MM] - [Título da Ação]
-
-**Status**: [Iniciando/Em progresso/Concluído/Bloqueado]
-
-**Ações realizadas**:
-- [ ] Ação 1
-- [ ] Ação 2
-- [ ] Ação 3
-
-**Decisões técnicas**:
-- Decisão 1: Justificativa
-- Decisão 2: Justificativa
-
-**Problemas encontrados**:
-- Problema 1: [Descrição]
-  - **Causa**: [Por que aconteceu]
-  - **Solução**: [Como foi resolvido]
-  - **Prevenção**: [Como evitar no futuro]
-
-**Descobertas**:
-- Descoberta 1
-- Descoberta 2
-
-**Comandos executados**:
+**D1 Database:**
 ```bash
-comando1
-comando2
+npx wrangler d1 create emaus-vota-db
+```
+- ✅ Nome: `emaus-vota-db`
+- ✅ ID: `bb0bdd12-c0a1-44c6-b3fc-dba40765a508`
+- ✅ Região: ENAM (Eastern North America)
+
+**R2 Storage:**
+```bash
+npx wrangler r2 bucket create emaus-vota-storage
+npx wrangler r2 bucket create emaus-vota-storage-local
+```
+- ✅ Produção: `emaus-vota-storage`
+- ✅ Desenvolvimento: `emaus-vota-storage-local`
+
+**Secrets:**
+```bash
+npx wrangler secret put SESSION_SECRET
+npx wrangler secret put RESEND_API_KEY
+```
+- ✅ `SESSION_SECRET`: Gerado automaticamente (64 caracteres)
+- ✅ `RESEND_API_KEY`: Configurado com chave do usuário
+
+**3. Configuração de Arquivos** ✅
+
+**`wrangler.toml`:**
+- ✅ D1 database binding configurado
+- ✅ R2 storage binding configurado
+- ✅ Cron trigger configurado (7h UTC = 4h BRT)
+- ✅ Variáveis de ambiente definidas
+
+**`package.json`:**
+- ✅ Scripts adicionados:
+  - `dev:worker` - Desenvolvimento local
+  - `build:worker` - Build do worker
+  - `deploy` - Deploy produção
+  - `db:migrate` - Aplicar migrations produção
+  - `db:migrate:local` - Aplicar migrations local
+  - `test:scheduled` - Testar cron triggers
+
+**`drizzle.config.worker.ts`:**
+- ✅ Configuração para gerar migrations D1
+
+**4. Schema Adaptado para Workers** ✅
+
+**`shared/schema-worker.ts`:**
+- ✅ Todas as tabelas do sistema (10 tabelas)
+- ✅ Web Crypto API implementada:
+  - `getGravatarUrl()` - Agora é `async` com `crypto.subtle.digest()`
+  - `generatePdfVerificationHash()` - Usa Web Crypto API
+- ✅ Todos os tipos TypeScript mantidos
+
+**Mudanças principais:**
+- Node.js `crypto` → Web Crypto API (`crypto.subtle`)
+- Funções síncronas → assíncronas (devido ao Web Crypto)
+
+**5. Migrations D1** ✅
+
+**Geração:**
+```bash
+npx drizzle-kit generate --config=drizzle.config.worker.ts
+```
+- ✅ Arquivo: `migrations/0000_loose_prima.sql`
+- ✅ 10 tabelas criadas
+- ✅ Índices únicos criados
+- ✅ Foreign keys configuradas
+- ✅ 15 comandos SQL
+
+**Aplicação Local:**
+```bash
+npx wrangler d1 migrations apply emaus-vota-db --local
+```
+- ✅ 15 comandos executados
+- ✅ Banco criado em `.wrangler/state/v3/d1/`
+
+**Aplicação Produção:**
+```bash
+npx wrangler d1 migrations apply emaus-vota-db --remote
+```
+- ✅ 15 comandos executados em 2.74ms
+- ✅ Banco de dados produção configurado
+
+**6. Worker Entry Point** ✅
+
+**Estrutura criada:**
+```
+workers/
+├── index.ts          # Entry point (Hono app)
+├── types.ts          # Tipos TypeScript
+├── storage/          # (Em desenvolvimento)
+└── routes/           # (Em desenvolvimento)
 ```
 
-**Output/Logs importantes**:
+**`workers/index.ts`:**
+- ✅ Hono framework configurado
+- ✅ CORS habilitado
+- ✅ Endpoints básicos:
+  - `GET /` - Status da API
+  - `GET /health` - Health check
+
+**`workers/types.ts`:**
+- ✅ Interface `Env` com bindings (DB, STORAGE, secrets)
+- ✅ Interface `SessionUser`
+
+**7. Teste de Configuração** ✅
+
+```bash
+npx wrangler dev --local
 ```
-[Cole aqui outputs relevantes]
+- ✅ Build bem-sucedido (47.3kb)
+- ✅ Bindings reconhecidos:
+  - `env.DB` (emaus-vota-db) - D1 Database local
+  - `env.STORAGE` (emaus-vota-storage-local) - R2 Bucket local
+
+---
+
+#### Problemas Encontrados e Resolvidos
+
+**1. Permissão R2 não encontrada**
+- **Problema:** Usuário não encontrava "R2" nas permissões do token
+- **Solução:** Mostrado que R2 aparece como "Workers R2 Storage" no dropdown
+- **Status:** ✅ Resolvido
+
+**2. Porta 5000 em uso**
+- **Problema:** Workflow Express falhou (EADDRINUSE)
+- **Solução:** Processo terminado e workflow reiniciado
+- **Status:** ✅ Resolvido
+
+**3. Tipos D1Database e R2Bucket não encontrados**
+- **Problema:** LSP errors em `workers/types.ts`
+- **Solução:** Adicionado import de `@cloudflare/workers-types`
+- **Status:** ✅ Resolvido
+
+---
+
+#### Comandos Executados
+
+```bash
+# 1. Criar D1 Database
+npx wrangler d1 create emaus-vota-db
+
+# 2. Criar R2 Buckets
+npx wrangler r2 bucket create emaus-vota-storage
+npx wrangler r2 bucket create emaus-vota-storage-local
+
+# 3. Atualizar wrangler.toml com database_id
+# (Editado manualmente: bb0bdd12-c0a1-44c6-b3fc-dba40765a508)
+
+# 4. Configurar Secrets
+npx wrangler secret put RESEND_API_KEY
+npx wrangler secret put SESSION_SECRET
+
+# 5. Listar recursos criados
+npx wrangler d1 list
+npx wrangler r2 bucket list
+npx wrangler secret list
+
+# 6. Criar diretórios do worker
+mkdir -p workers/storage workers/routes
+
+# 7. Gerar migrations D1
+npx drizzle-kit generate --config=drizzle.config.worker.ts
+
+# 8. Aplicar migrations localmente
+npx wrangler d1 migrations apply emaus-vota-db --local
+
+# 9. Aplicar migrations em produção
+npx wrangler d1 migrations apply emaus-vota-db --remote
+
+# 10. Testar worker localmente
+npx wrangler dev --local
 ```
 
-**Arquivos modificados**:
-- arquivo1.ts (criado/modificado/deletado)
-- arquivo2.ts (criado/modificado/deletado)
+---
 
-**Próximos passos**:
-- [ ] Próximo passo 1
-- [ ] Próximo passo 2
-```
+#### Arquivos Criados/Modificados
+
+**Criados:**
+- ✅ `shared/schema-worker.ts` (367 linhas)
+- ✅ `workers/index.ts` (26 linhas)
+- ✅ `workers/types.ts` (12 linhas)
+- ✅ `drizzle.config.worker.ts` (7 linhas)
+- ✅ `migrations/0000_loose_prima.sql` (113 linhas)
+- ✅ `RESUMO_CONFIGURACAO.md` (Documentação completa)
+- ✅ `INSTRUCOES_APLICAR_MIGRATIONS.md` (Guia de migrations)
+- ✅ `PASSO_A_PASSO_CLOUDFLARE.md` (Guia manual - agora obsoleto)
+
+**Modificados:**
+- ✅ `wrangler.toml` (database_id, bindings, migrations_dir)
+- ✅ `package.json` (7 scripts adicionados)
 
 ---
 
-## 🔔 Quando Atualizar o Diário
+#### Métricas
 
-Atualize este arquivo SEMPRE que:
-
-1. ✅ **Iniciar uma nova tarefa**
-   - Registrar início, objetivo e plano
-
-2. 🐛 **Encontrar um problema**
-   - Documentar erro, causa, tentativas, solução
-
-3. 💡 **Tomar uma decisão técnica importante**
-   - Explicar o que, por que e alternativas consideradas
-
-4. ✅ **Concluir uma tarefa**
-   - Resumir o que foi feito e resultados
-
-5. 🔄 **Mudança de planos**
-   - Explicar por que o plano mudou
-
-6. ⏸️ **Bloquear/desbloquear tarefa**
-   - Documentar bloqueio e como foi resolvido
+**Tempo total:** ~3h30min
+**Comandos executados:** 10+
+**Recursos criados:** 5 (1 database, 2 buckets, 2 secrets)
+**Linhas de código:** ~425 linhas
+**Migrations aplicadas:** 1 (15 comandos SQL)
 
 ---
 
-## 🎯 Checklist de Atualização Diária
+#### Próximos Passos
 
-Ao final de cada dia de trabalho:
+**Tarefa 5: Criar D1Storage** (Em progresso)
+- [ ] Adaptar `server/storage.ts` para D1
+- [ ] Implementar métodos usando `env.DB.prepare()`
+- [ ] Testar queries localmente
 
-- [ ] Atualizar progresso geral (% concluído)
-- [ ] Documentar lições aprendidas
-- [ ] Listar problemas não resolvidos
-- [ ] Definir prioridades para o próximo dia
-- [ ] Commit das mudanças no git
+**Tarefa 6: Criar R2Storage**
+- [ ] Implementar upload de fotos
+- [ ] Implementar download de fotos
+- [ ] Implementar delete de fotos
 
----
+**Tarefa 7-9: Migrar Rotas**
+- [ ] Converter Express → Hono
+- [ ] Implementar middleware JWT
+- [ ] Testar todas as rotas
 
-## 📚 Recursos Úteis
-
-- [Cloudflare Workers Docs](https://developers.cloudflare.com/workers/)
-- [D1 Database Docs](https://developers.cloudflare.com/d1/)
-- [R2 Storage Docs](https://developers.cloudflare.com/r2/)
-- [Hono Framework](https://hono.dev/)
-- [Drizzle ORM - D1](https://orm.drizzle.team/docs/get-started-sqlite#cloudflare-d1)
-- [Web Crypto API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Crypto_API)
-
----
-
-## 🎯 Métricas de Sucesso
-
-Após a migração completa, esperamos:
-
-- ✅ **100% uptime**: Sistema sempre online
-- ✅ **Dados persistentes**: Sem perda de dados
-- ✅ **Performance**: <100ms de latência global
-- ✅ **Custo**: $0/mês (plano gratuito)
-- ✅ **Escalabilidade**: Automática e ilimitada
-- ✅ **Todas funcionalidades**: Mantidas e funcionando
+**Tarefa 10: Deploy**
+- [ ] Testar Worker completo localmente
+- [ ] Deploy para Cloudflare Workers
+- [ ] Configurar domínio (opcional)
 
 ---
 
-**Última atualização**: 2024-11-14 14:30  
-**Status atual**: Documentação criada ✅  
-**Próxima ação**: Aguardando confirmação para instalar dependências
+#### Decisões Técnicas
+
+**1. Web Crypto API vs Node.js crypto**
+- **Decisão:** Usar Web Crypto API
+- **Razão:** Cloudflare Workers não suporta Node.js crypto
+- **Impacto:** Funções hash agora são assíncronas
+
+**2. D1 vs Neon PostgreSQL**
+- **Decisão:** Migrar para D1
+- **Razão:** Eliminar perda de dados, serverless nativo
+- **Impacto:** SQLite syntax, sem perda de dados
+
+**3. R2 vs File System**
+- **Decisão:** Migrar para R2
+- **Razão:** Workers não têm file system persistente
+- **Impacto:** API diferente (put/get/delete)
+
+**4. Hono vs Express**
+- **Decisão:** Migrar para Hono
+- **Razão:** Framework otimizado para Workers
+- **Impacto:** Sintaxe similar, performance melhor
+
+---
+
+#### Recursos de Produção
+
+**D1 Database:**
+- URL: Cloudflare Dashboard → D1 → emaus-vota-db
+- ID: `bb0bdd12-c0a1-44c6-b3fc-dba40765a508`
+- Tamanho: 8192 bytes (vazio)
+- Tabelas: 10
+
+**R2 Storage:**
+- URL: Cloudflare Dashboard → R2 → emaus-vota-storage
+- Created: 2025-11-14T15:06:31.845Z
+- Storage class: Standard
+
+**Worker:**
+- Nome: `emaus-vota`
+- Status: Não deployado ainda
+- URL: (Será criada no deploy)
+
+---
+
+#### Lições Aprendidas
+
+1. ✅ **API Tokens funcionam melhor que login manual**
+   - Automação completa
+   - Sem interação do usuário
+   - Mais rápido
+
+2. ✅ **Migrations devem ser testadas localmente SEMPRE**
+   - Evita erros em produção
+   - Rollback mais fácil
+
+3. ✅ **Web Crypto API requer funções assíncronas**
+   - Planejar async/await desde o início
+   - Impacto em todo o código que usa hash
+
+4. ✅ **Drizzle Kit simplifica migrations**
+   - Geração automática a partir do schema
+   - Menos erros manuais
+
+---
+
+**Sessão encerrada:** 15:15 BRT  
+**Próxima sessão:** Finalizar D1Storage e R2Storage
+
