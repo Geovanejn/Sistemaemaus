@@ -5,26 +5,31 @@ import { createAuthMiddleware } from '../auth';
 import { createAdminMiddleware } from './middleware/admin';
 
 /**
- * PUBLIC Member Routes (mounted at /api/members)
+ * Member Routes (mounted at /api/members)
  * 
  * IMPORTANTE: Estas rotas são montadas em /api/members (SEM /admin prefix)
  * para manter compatibilidade com o frontend que espera estas URLs.
  * 
- * Estas rotas são PÚBLICAS - voters autenticados precisam acessar para votar.
+ * CORREÇÃO DE SEGURANÇA: Todas as rotas agora requerem AUTH + ADMIN (alinhado com Express)
  * 
- * GET /api/members - Listar todos os membros (PÚBLICO - voters precisam)
- * GET /api/members/non-admins - Listar membros não-admins com filtros (PÚBLICO - voters precisam)
+ * GET /api/members - Listar todos os membros (ADMIN ONLY)
+ * GET /api/members/non-admins - Listar membros não-admins com filtros (ADMIN ONLY)
  */
 export function createPublicMemberRoutes(app: Hono<AuthContext>) {
   const membersRouter = new Hono<AuthContext>();
   
-  // Dependency Injection apenas - SEM auth middleware (rotas públicas)
+  // Dependency Injection
   membersRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  // GET /api/members - Listar todos os membros
+  // Auth + Admin middleware para TODAS as rotas de members (correção de segurança crítica)
+  membersRouter.use('/*', createAuthMiddleware());
+  membersRouter.use('/*', createAdminMiddleware());
+  
+  // GET /api/members - Listar todos os membros (ADMIN ONLY)
+  // Alinhado com Express: authenticateToken + requireAdmin
   membersRouter.get('/', async (c) => {
     try {
       const storage = c.get('d1Storage') as D1Storage;
@@ -39,7 +44,8 @@ export function createPublicMemberRoutes(app: Hono<AuthContext>) {
     }
   });
 
-  // GET /api/members/non-admins - Listar membros não-admins
+  // GET /api/members/non-admins - Listar membros não-admins (ADMIN ONLY)
+  // Alinhado com Express: authenticateToken + requireAdmin
   // Usado para selecionar candidatos, com filtros:
   // - Exclui admins
   // - Exclui vencedores da eleição atual (query param electionId)
