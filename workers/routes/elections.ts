@@ -8,14 +8,15 @@ import { createAuthMiddleware } from '../auth';
  * Elections Routes - Rotas de gerenciamento de eleições
  * 
  * ATENÇÃO: Montado em /api/elections (SEM /admin prefix) para compatibilidade
- * com clientes existentes, MAS ainda protegido por admin middleware
  * 
- * Rotas CRUD:
+ * Rotas PÚBLICAS:
+ * - GET    /api/elections/active - Eleição ativa (PÚBLICO)
+ * 
+ * Rotas CRUD (ADMIN):
  * - POST   /api/elections - Criar eleição (ADMIN)
  * - PATCH  /api/elections/:id/close - Encerrar eleição (ADMIN)
  * - POST   /api/elections/:id/finalize - Finalizar eleição (ADMIN)
  * - GET    /api/elections/history - Histórico eleições (ADMIN)
- * - GET    /api/elections/active - Eleição ativa (autenticado)
  * 
  * Rotas Attendance:
  * - GET    /api/elections/:id/attendance - Lista presença (ADMIN)
@@ -30,13 +31,36 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   // MIDDLEWARE CHAIN (router-level - executa em ORDEM)
   // ========================================
   
-  // 1. Dependency injection PRIMEIRO
+  // 1. Dependency injection SEMPRE PRIMEIRO (todas rotas)
   electionsRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  // 2. Authentication SEGUNDO (todas rotas precisam auth)
+  // ========================================
+  // ROTAS PÚBLICAS (ANTES do middleware de autenticação)
+  // ========================================
+  
+  // GET /api/elections/active - Eleição ativa (PÚBLICO)
+  electionsRouter.get('/active', async (c) => {
+    try {
+      const storage = c.get('d1Storage') as D1Storage;
+      const activeElection = await storage.getActiveElection();
+      
+      if (!activeElection) {
+        return c.json({ message: 'Nenhuma eleição ativa no momento' }, 404);
+      }
+      
+      return c.json(activeElection);
+    } catch (error) {
+      console.error('[Elections] Error getting active election:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao buscar eleição ativa' 
+      }, 500);
+    }
+  });
+  
+  // 2. Authentication para TODAS as outras rotas (exceto /active acima)
   electionsRouter.use('/*', createAuthMiddleware());
   
   // ========================================
@@ -138,25 +162,6 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
       console.error('[Elections] Error getting history:', error);
       return c.json({ 
         message: error instanceof Error ? error.message : 'Erro ao buscar histórico de eleições' 
-      }, 500);
-    }
-  });
-  
-  // GET /api/elections/active - Eleição ativa (qualquer autenticado)
-  electionsRouter.get('/active', async (c) => {
-    try {
-      const storage = c.get('d1Storage') as D1Storage;
-      const activeElection = await storage.getActiveElection();
-      
-      if (!activeElection) {
-        return c.json({ message: 'Nenhuma eleição ativa no momento' }, 404);
-      }
-      
-      return c.json(activeElection);
-    } catch (error) {
-      console.error('[Elections] Error getting active election:', error);
-      return c.json({ 
-        message: error instanceof Error ? error.message : 'Erro ao buscar eleição ativa' 
       }, 500);
     }
   });

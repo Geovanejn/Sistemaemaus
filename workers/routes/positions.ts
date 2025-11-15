@@ -6,11 +6,13 @@ import { createAuthMiddleware } from '../auth';
 /**
  * Positions Routes - Gerenciamento de cargos/posições da eleição
  * 
- * Rotas:
- * - GET    /api/elections/:id/positions - Listar cargos da eleição
- * - GET    /api/elections/:id/positions/active - Cargo ativo
+ * Rotas PÚBLICAS:
+ * - GET    /api/elections/:id/positions/active - Cargo ativo (PÚBLICO - voters precisam)
+ * 
+ * Rotas ADMIN:
+ * - GET    /api/elections/:id/positions - Listar cargos da eleição (ADMIN)
  * - POST   /api/elections/:id/positions/advance-scrutiny - Avançar escrutínio (ADMIN)
- * - GET    /api/elections/:id/positions/check-tie - Verificar empate
+ * - GET    /api/elections/:id/positions/check-tie - Verificar empate (ADMIN)
  * - POST   /api/elections/:id/positions/resolve-tie - Resolver empate (ADMIN)
  * - POST   /api/elections/:id/positions/open-next - Abrir próximo cargo (ADMIN)
  * - POST   /api/elections/:id/positions/:positionId/open - Abrir cargo específico (ADMIN)
@@ -19,16 +21,14 @@ import { createAuthMiddleware } from '../auth';
 export function createPositionsRoutes(app: Hono<AuthContext>) {
   const positionsRouter = new Hono<AuthContext>();
   
-  // Middleware chain
+  // Dependency injection apenas - SEM auth middleware global!
   positionsRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  positionsRouter.use('/*', createAuthMiddleware());
-  
   // GET /api/elections/:id/positions - Listar todos os cargos (ADMIN ONLY)
-  positionsRouter.get('/:id/positions', async (c) => {
+  positionsRouter.get('/:id/positions', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -57,13 +57,9 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // GET /api/elections/:id/positions/active - Cargo ativo (AUTHENTICATED)
-  // IMPORTANTE: Voters precisam acessar para saber em qual cargo votar!
+  // GET /api/elections/:id/positions/active - Cargo ativo (PÚBLICO)
+  // IMPORTANTE: Voters autenticados E não-autenticados podem acessar (alinhado com Express)
   positionsRouter.get('/:id/positions/active', async (c) => {
-    const user = c.get('user');
-    if (!user) {
-      return c.json({ error: 'Autenticação necessária' }, 401);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('id'));
@@ -90,7 +86,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/positions/advance-scrutiny - Avançar escrutínio (ADMIN)
-  positionsRouter.post('/:id/positions/advance-scrutiny', async (c) => {
+  positionsRouter.post('/:id/positions/advance-scrutiny', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -115,7 +111,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // GET /api/elections/:id/positions/check-tie - Verificar empate (ADMIN ONLY)
-  positionsRouter.get('/:id/positions/check-tie', async (c) => {
+  positionsRouter.get('/:id/positions/check-tie', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -162,7 +158,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/positions/resolve-tie - Resolver empate (ADMIN)
-  positionsRouter.post('/:id/positions/resolve-tie', async (c) => {
+  positionsRouter.post('/:id/positions/resolve-tie', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -194,7 +190,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/positions/open-next - Abrir próximo cargo (ADMIN)
-  positionsRouter.post('/:id/positions/open-next', async (c) => {
+  positionsRouter.post('/:id/positions/open-next', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -219,7 +215,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/positions/:positionId/open - Abrir cargo específico (ADMIN)
-  positionsRouter.post('/:id/positions/:positionId/open', async (c) => {
+  positionsRouter.post('/:id/positions/:positionId/open', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -247,7 +243,7 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/positions/:positionId/force-close - Forçar fechar (ADMIN)
-  positionsRouter.post('/:id/positions/:positionId/force-close', async (c) => {
+  positionsRouter.post('/:id/positions/:positionId/force-close', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);

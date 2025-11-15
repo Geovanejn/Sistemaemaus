@@ -115,24 +115,21 @@ export function createCandidatesRoutes(app: Hono<AuthContext>) {
 /**
  * Candidates by Position Routes - Candidatos por posição específica
  * Montado em /api/elections para manter compatibilidade
+ * 
+ * IMPORTANTE: Rota PÚBLICA para permitir visualização de candidatos
  */
 export function createCandidatesByPositionRoutes(app: Hono<AuthContext>) {
   const router = new Hono<AuthContext>();
   
+  // Dependency injection apenas - SEM auth middleware (rota pública)
   router.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  router.use('/*', createAuthMiddleware());
-  
-  // GET /api/elections/:electionId/positions/:positionId/candidates (AUTHENTICATED)
-  // IMPORTANTE: Voters precisam acessar para ver quem são os candidatos antes de votar!
+  // GET /api/elections/:electionId/positions/:positionId/candidates (PÚBLICO)
+  // IMPORTANTE: Voters autenticados E não-autenticados podem ver candidatos (alinhado com Express)
   router.get('/:electionId/positions/:positionId/candidates', async (c) => {
-    const user = c.get('user');
-    if (!user) {
-      return c.json({ error: 'Autenticação necessária' }, 401);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('electionId'));
