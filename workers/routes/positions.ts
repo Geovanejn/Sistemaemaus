@@ -7,7 +7,10 @@ import { createAuthMiddleware } from '../auth';
  * Positions Routes - Gerenciamento de cargos/posições da eleição
  * 
  * Rotas PÚBLICAS:
- * - GET    /api/elections/:id/positions/active - Cargo ativo (PÚBLICO - voters precisam)
+ * - GET    /api/positions - Listar todos os cargos disponíveis (PÚBLICO - admin dropdown)
+ * 
+ * Rotas AUTH REQUIRED:
+ * - GET    /api/elections/:id/positions/active - Cargo ativo (AUTH - voters precisam)
  * 
  * Rotas ADMIN:
  * - GET    /api/elections/:id/positions - Listar cargos da eleição (ADMIN)
@@ -57,9 +60,9 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // GET /api/elections/:id/positions/active - Cargo ativo (PÚBLICO)
-  // IMPORTANTE: Voters autenticados E não-autenticados podem acessar (alinhado com Express)
-  positionsRouter.get('/:id/positions/active', async (c) => {
+  // GET /api/elections/:id/positions/active - Cargo ativo (AUTH REQUIRED)
+  // Alinhado com Express - requer autenticação
+  positionsRouter.get('/:id/positions/active', createAuthMiddleware(), async (c) => {
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('id'));
@@ -272,5 +275,21 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
   });
   
   app.route('/api/elections', positionsRouter);
+  
+  // Register global positions route (mounted directly on app, not on positionsRouter)
+  // GET /api/positions - Listar todos os cargos disponíveis (PÚBLICO - usado no admin dropdown)
+  app.get('/api/positions', async (c) => {
+    try {
+      const storage = new D1Storage(c.env.DB);
+      const positions = await storage.getAllPositions();
+      return c.json(positions);
+    } catch (error) {
+      console.error('[Positions] Error getting all positions:', error);
+      return c.json({ 
+        message: error instanceof Error ? error.message : 'Erro ao buscar cargos' 
+      }, 500);
+    }
+  });
+  
   return app;
 }

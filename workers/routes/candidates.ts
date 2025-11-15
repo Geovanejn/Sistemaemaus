@@ -11,10 +11,10 @@ import { z } from 'zod';
  * Rotas ADMIN:
  * - POST /api/candidates - Adicionar candidato (ADMIN)
  * - POST /api/candidates/batch - Adicionar múltiplos candidatos (ADMIN)
- * - GET  /api/candidates - Listar candidatos da eleição ativa (ADMIN)
  * 
- * Rotas PÚBLICAS:
- * - GET  /api/elections/:electionId/positions/:positionId/candidates - Candidatos por posição (PÚBLICO)
+ * Rotas AUTH REQUIRED:
+ * - GET  /api/candidates - Listar candidatos da eleição ativa (AUTH)
+ * - GET  /api/elections/:electionId/positions/:positionId/candidates - Candidatos por posição (AUTH)
  */
 export function createCandidatesRoutes(app: Hono<AuthContext>) {
   const candidatesRouter = new Hono<AuthContext>();
@@ -84,12 +84,8 @@ export function createCandidatesRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // GET /api/candidates - Listar candidatos da eleição ativa (ADMIN ONLY)
+  // GET /api/candidates - Listar candidatos da eleição ativa (AUTH REQUIRED)
   candidatesRouter.get('/', createAuthMiddleware(), async (c) => {
-    const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const activeElection = await storage.getActiveElection();
@@ -116,19 +112,22 @@ export function createCandidatesRoutes(app: Hono<AuthContext>) {
  * Candidates by Position Routes - Candidatos por posição específica
  * Montado em /api/elections para manter compatibilidade
  * 
- * IMPORTANTE: Rota PÚBLICA para permitir visualização de candidatos
+ * IMPORTANTE: Requer autenticação (alinhado com Express)
  */
 export function createCandidatesByPositionRoutes(app: Hono<AuthContext>) {
   const router = new Hono<AuthContext>();
   
-  // Dependency injection apenas - SEM auth middleware (rota pública)
+  // Dependency injection
   router.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  // GET /api/elections/:electionId/positions/:positionId/candidates (PÚBLICO)
-  // IMPORTANTE: Voters autenticados E não-autenticados podem ver candidatos (alinhado com Express)
+  // Auth middleware para todas as rotas
+  router.use('/*', createAuthMiddleware());
+  
+  // GET /api/elections/:electionId/positions/:positionId/candidates (AUTH REQUIRED)
+  // Alinhado com Express - requer autenticação
   router.get('/:electionId/positions/:positionId/candidates', async (c) => {
     try {
       const storage = c.get('d1Storage') as D1Storage;
