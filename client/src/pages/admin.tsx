@@ -156,7 +156,7 @@ export default function AdminPage() {
     currentScrutiny: number;
     orderIndex: number;
   }>>({
-    queryKey: ["/api/elections", activeElection?.id, "positions"],
+    queryKey: activeElection ? [`/api/elections/${activeElection.id}/positions`] : [],
     enabled: !!activeElection,
     staleTime: 10000,
   });
@@ -171,7 +171,7 @@ export default function AdminPage() {
     currentScrutiny: number;
     orderIndex: number;
   } | null>({
-    queryKey: ["/api/elections", activeElection?.id, "positions", "active"],
+    queryKey: activeElection ? [`/api/elections/${activeElection.id}/positions/active`] : [],
     enabled: !!activeElection,
     staleTime: 10000,
   });
@@ -185,14 +185,14 @@ export default function AdminPage() {
     memberEmail: string;
     isPresent: boolean;
   }>>({
-    queryKey: ["/api/elections", activeElection?.id, "attendance"],
+    queryKey: activeElection ? [`/api/elections/${activeElection.id}/attendance`] : [],
     enabled: !!activeElection,
     staleTime: 5000,
   });
 
   // Present count
   const { data: presentCountData } = useQuery<{ presentCount: number }>({
-    queryKey: ["/api/elections", activeElection?.id, "attendance", "count"],
+    queryKey: activeElection ? [`/api/elections/${activeElection.id}/attendance/count`] : [],
     enabled: !!activeElection,
     staleTime: 5000,
   });
@@ -384,7 +384,9 @@ export default function AdminPage() {
       return await apiRequest("POST", `/api/elections/${electionId}/attendance/initialize`, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "attendance"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/attendance`] });
+      }
       toast({
         title: "Lista de presença inicializada!",
         description: "Todos os membros foram adicionados à lista",
@@ -404,8 +406,10 @@ export default function AdminPage() {
       return await apiRequest("PATCH", `/api/elections/${electionId}/attendance/${memberId}`, { isPresent });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "attendance"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "attendance", "count"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/attendance`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/attendance/count`] });
+      }
     },
     onError: (error: Error) => {
       toast({
@@ -421,8 +425,10 @@ export default function AdminPage() {
       return await apiRequest("POST", `/api/elections/${electionId}/positions/advance-scrutiny`, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions", "active"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions/active`] });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/results/latest"] });
       queryClient.invalidateQueries({ queryKey: ["/api/members/non-admins"] });
       toast({
@@ -444,8 +450,10 @@ export default function AdminPage() {
       return await apiRequest("POST", `/api/elections/${electionId}/positions/open-next`, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions", "active"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions/active`] });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/results/latest"] });
       queryClient.invalidateQueries({ queryKey: ["/api/members/non-admins"] });
       toast({
@@ -467,8 +475,10 @@ export default function AdminPage() {
       return await apiRequest("POST", `/api/elections/${data.electionId}/positions/${data.electionPositionId}/open`, {});
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions", "active"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions/active`] });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/results/latest"] });
       queryClient.invalidateQueries({ queryKey: ["/api/members/non-admins"] });
       toast({
@@ -494,8 +504,10 @@ export default function AdminPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/results/latest"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions", "active"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions/active`] });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/members/non-admins"] });
       toast({
         title: "Vencedor definido!",
@@ -520,11 +532,13 @@ export default function AdminPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "positions", "active"] });
+      if (activeElection) {
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/positions/active`] });
+        queryClient.invalidateQueries({ queryKey: [`/api/elections/${activeElection.id}/attendance`] });
+      }
       queryClient.invalidateQueries({ queryKey: ["/api/results/latest"] });
       queryClient.invalidateQueries({ queryKey: ["/api/members/non-admins"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/elections", activeElection?.id, "attendance"] });
       toast({
         title: "Cargo fechado manualmente",
         description: "O cargo foi encerrado com sucesso",
