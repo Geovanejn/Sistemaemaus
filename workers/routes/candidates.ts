@@ -8,25 +8,25 @@ import { z } from 'zod';
 /**
  * Candidates Routes - Gerenciamento de candidatos
  * 
- * Rotas:
+ * Rotas ADMIN:
  * - POST /api/candidates - Adicionar candidato (ADMIN)
  * - POST /api/candidates/batch - Adicionar múltiplos candidatos (ADMIN)
- * - GET  /api/candidates - Listar candidatos da eleição ativa
- * - GET  /api/elections/:electionId/positions/:positionId/candidates - Candidatos por posição
+ * - GET  /api/candidates - Listar candidatos da eleição ativa (ADMIN)
+ * 
+ * Rotas PÚBLICAS:
+ * - GET  /api/elections/:electionId/positions/:positionId/candidates - Candidatos por posição (PÚBLICO)
  */
 export function createCandidatesRoutes(app: Hono<AuthContext>) {
   const candidatesRouter = new Hono<AuthContext>();
   
-  // Middleware chain
+  // Dependency injection apenas - auth middleware aplicado por rota
   candidatesRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  candidatesRouter.use('/*', createAuthMiddleware());
-  
   // POST /api/candidates - Adicionar candidato (ADMIN)
-  candidatesRouter.post('/', async (c) => {
+  candidatesRouter.post('/', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -50,7 +50,7 @@ export function createCandidatesRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/candidates/batch - Adicionar múltiplos candidatos (ADMIN)
-  candidatesRouter.post('/batch', async (c) => {
+  candidatesRouter.post('/batch', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -85,7 +85,7 @@ export function createCandidatesRoutes(app: Hono<AuthContext>) {
   });
   
   // GET /api/candidates - Listar candidatos da eleição ativa (ADMIN ONLY)
-  candidatesRouter.get('/', async (c) => {
+  candidatesRouter.get('/', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);

@@ -60,15 +60,12 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // 2. Authentication para TODAS as outras rotas (exceto /active acima)
-  electionsRouter.use('/*', createAuthMiddleware());
-  
   // ========================================
-  // ELECTIONS CRUD ROUTES
+  // ELECTIONS CRUD ROUTES (ADMIN - auth middleware por rota)
   // ========================================
   
   // POST /api/elections - Criar eleição (ADMIN)
-  electionsRouter.post('/', async (c) => {
+  electionsRouter.post('/', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -92,7 +89,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
   
   // PATCH /api/elections/:id/close - Encerrar eleição (ADMIN)
-  electionsRouter.patch('/:id/close', async (c) => {
+  electionsRouter.patch('/:id/close', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -117,7 +114,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
   
   // POST /api/elections/:id/finalize - Finalizar eleição (ADMIN)
-  electionsRouter.post('/:id/finalize', async (c) => {
+  electionsRouter.post('/:id/finalize', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -149,7 +146,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
   
   // GET /api/elections/history - Histórico (ADMIN)
-  electionsRouter.get('/history', async (c) => {
+  electionsRouter.get('/history', createAuthMiddleware(), async (c) => {
     const user = c.get('user');
     if (!user?.isAdmin) {
       return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
@@ -167,13 +164,11 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
   
   // ========================================
-  // ATTENDANCE ROUTES
+  // ATTENDANCE ROUTES (ADMIN - auth middleware por rota)
   // ========================================
-  // NOTA: Todas requerem AUTH (via .use acima)
-  // Rotas admin fazem verificação manual de isAdmin no handler
   
   // GET /api/elections/:id/attendance - Lista de presença (ADMIN)
-  electionsRouter.get('/:id/attendance', async (c) => {
+  electionsRouter.get('/:id/attendance', createAuthMiddleware(), async (c) => {
     // Verificação manual de admin
     const user = c.get('user');
     if (!user?.isAdmin) {
@@ -213,7 +208,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
 
   // POST /api/elections/:id/attendance/initialize - Inicializar lista (ADMIN)
-  electionsRouter.post('/:id/attendance/initialize', async (c) => {
+  electionsRouter.post('/:id/attendance/initialize', createAuthMiddleware(), async (c) => {
     // Verificação manual de admin
     const user = c.get('user');
     if (!user?.isAdmin) {
@@ -234,7 +229,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
 
   // PATCH /api/elections/:id/attendance/:memberId - Atualizar presença (ADMIN)
-  electionsRouter.patch('/:id/attendance/:memberId', async (c) => {
+  electionsRouter.patch('/:id/attendance/:memberId', createAuthMiddleware(), async (c) => {
     // Verificação manual de admin
     const user = c.get('user');
     if (!user?.isAdmin) {
@@ -261,8 +256,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
   });
 
   // GET /api/elections/:id/attendance/count - Contar presentes (qualquer autenticado)
-  // NOTA: Esta rota NÃO requer admin, apenas autenticação (já aplicada via .use)
-  electionsRouter.get('/:id/attendance/count', async (c) => {
+  electionsRouter.get('/:id/attendance/count', createAuthMiddleware(), async (c) => {
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('id'));

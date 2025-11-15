@@ -10,25 +10,19 @@ import { createAdminMiddleware } from './middleware/admin';
  * IMPORTANTE: Estas rotas são montadas em /api/members (SEM /admin prefix)
  * para manter compatibilidade com o frontend que espera estas URLs.
  * 
- * Todas as rotas ainda requerem autenticação + isAdmin via middleware.
+ * Estas rotas são PÚBLICAS - voters autenticados precisam acessar para votar.
  * 
- * GET /api/members - Listar todos os membros (admin only)
- * GET /api/members/non-admins - Listar membros não-admins com filtros (admin only)
+ * GET /api/members - Listar todos os membros (PÚBLICO - voters precisam)
+ * GET /api/members/non-admins - Listar membros não-admins com filtros (PÚBLICO - voters precisam)
  */
 export function createPublicMemberRoutes(app: Hono<AuthContext>) {
   const membersRouter = new Hono<AuthContext>();
   
-  // Dependency Injection - ANTES de auth/admin middlewares
+  // Dependency Injection apenas - SEM auth middleware (rotas públicas)
   membersRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
-  
-  // Aplicar middleware de autenticação PRIMEIRO
-  membersRouter.use('/*', createAuthMiddleware());
-  
-  // Depois aplicar middleware de admin
-  membersRouter.use('/*', createAdminMiddleware());
   
   // GET /api/members - Listar todos os membros
   membersRouter.get('/', async (c) => {
