@@ -10,10 +10,13 @@ import {
 /**
  * Member Routes - CRUD de membros + upload de fotos
  * 
- * POST   /members           - Criar novo membro
- * PATCH  /members/:id       - Atualizar membro
- * DELETE /members/:id       - Deletar membro
- * POST   /members/:id/photo - Upload foto do membro (R2)
+ * NOTA: Rotas GET foram movidas para workers/routes/members.ts (montadas em /api/members)
+ * para manter compatibilidade com frontend. Este router mantém apenas operações de escrita.
+ * 
+ * POST   /members              - Criar novo membro
+ * PATCH  /members/:id          - Atualizar membro
+ * DELETE /members/:id          - Deletar membro
+ * POST   /members/:id/photo    - Upload foto do membro (R2)
  */
 export function createMemberRoutes(app: Hono<AuthContext>) {
   

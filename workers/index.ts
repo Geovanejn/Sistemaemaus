@@ -3,6 +3,7 @@ import { cors } from 'hono/cors';
 import type { Env, AuthContext } from './types';
 import { R2Storage } from './storage/r2-storage';
 import { createAuthRoutes } from './routes/auth';
+import { createPublicMemberRoutes } from './routes/members';
 import { createAdminRoutes } from './routes/admin';
 import { createElectionsRoutes } from './routes/elections';
 import { createPositionsRoutes } from './routes/positions';
@@ -49,6 +50,10 @@ app.get('/photos/*', async (c) => {
 
 // Register authentication routes
 createAuthRoutes(app);
+
+// Register public member routes at /api/members (admin-protected via middleware)
+// IMPORTANTE: Registrar ANTES de admin routes para evitar conflitos
+createPublicMemberRoutes(app);
 
 // Register admin routes (protected by admin middleware)
 createAdminRoutes(app);
