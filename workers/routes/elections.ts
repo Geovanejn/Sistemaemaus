@@ -262,7 +262,7 @@ export function createElectionsRoutes(app: Hono<AuthContext>) {
       const electionId = parseInt(c.req.param('id'));
       
       const count = await storage.getPresentCount(electionId);
-      return c.json({ count });
+      return c.json({ presentCount: count });
     } catch (error) {
       console.error('[Elections] Error counting attendance:', error);
       return c.json({ 
