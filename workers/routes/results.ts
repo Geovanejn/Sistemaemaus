@@ -6,28 +6,24 @@ import { createAuthMiddleware } from '../auth';
 /**
  * Results Routes - Resultados das eleições
  * 
+ * IMPORTANTE: Rotas PÚBLICAS (sem autenticação) para transparência eleitoral
+ * 
  * Rotas:
- * - GET /api/results/latest - Resultados da última eleição
- * - GET /api/results/:electionId - Resultados de eleição específica
- * - GET /api/elections/:electionId/winners - Vencedores da eleição
+ * - GET /api/results/latest - Resultados da última eleição (PÚBLICO)
+ * - GET /api/results/:electionId - Resultados de eleição específica (PÚBLICO)
+ * - GET /api/elections/:electionId/winners - Vencedores da eleição (PÚBLICO)
  */
 export function createResultsRoutes(app: Hono<AuthContext>) {
   const resultsRouter = new Hono<AuthContext>();
   
-  // Middleware chain
+  // Dependency injection apenas - SEM auth middleware (rotas públicas)
   resultsRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  resultsRouter.use('/*', createAuthMiddleware());
-  
-  // GET /api/results/latest - Resultados da última eleição (ADMIN ONLY)
+  // GET /api/results/latest - Resultados da última eleição (PÚBLICO)
   resultsRouter.get('/latest', async (c) => {
-    const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const results = await storage.getLatestElectionResults();
@@ -45,12 +41,8 @@ export function createResultsRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // GET /api/results/:electionId - Resultados de eleição específica (ADMIN ONLY)
+  // GET /api/results/:electionId - Resultados de eleição específica (PÚBLICO)
   resultsRouter.get('/:electionId', async (c) => {
-    const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('electionId'));
@@ -72,23 +64,20 @@ export function createResultsRoutes(app: Hono<AuthContext>) {
 /**
  * Winners Routes - Vencedores por eleição
  * Montado em /api/elections para compatibilidade
+ * 
+ * IMPORTANTE: Rota PÚBLICA para transparência dos resultados eleitorais
  */
 export function createWinnersRoutes(app: Hono<AuthContext>) {
   const winnersRouter = new Hono<AuthContext>();
   
+  // Dependency injection apenas - SEM auth middleware (rota pública)
   winnersRouter.use('/*', async (c, next) => {
     c.set('d1Storage', new D1Storage(c.env.DB));
     await next();
   });
   
-  winnersRouter.use('/*', createAuthMiddleware());
-  
-  // GET /api/elections/:electionId/winners (ADMIN ONLY)
+  // GET /api/elections/:electionId/winners (PÚBLICO)
   winnersRouter.get('/:electionId/winners', async (c) => {
-    const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
-    }
     try {
       const storage = c.get('d1Storage') as D1Storage;
       const electionId = parseInt(c.req.param('electionId'));
