@@ -1,0 +1,26 @@
+#:schema node_modules/wrangler/config-schema.json
+name = "emaus-vota"
+main = "dist-worker/index.js"
+compatibility_date = "2024-11-14"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "emaus-vota-db"
+database_id = "bb0bdd12-c0a1-44c6-b3fc-dba40765a508"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "emaus-vota-storage"
+
+[triggers]
+crons = ["0 7 * * *"]
+
+[vars]
+ENVIRONMENT = "production"
+RESEND_FROM_EMAIL = "noreply@emausvota.com.br"
+
+[assets]
+directory = "./dist/public"
+binding = "ASSETS"
+not_found_handling = "single-page-application"
