@@ -81,7 +81,7 @@ createAuditRoutes(app);
 app.get('*', async (c) => {
   // Get the asset from ASSETS binding
   const url = new URL(c.req.url);
-  const assetResponse = await c.env.ASSETS.fetch(url);
+  const assetResponse = await c.env.ASSETS.fetch(url.toString());
   
   // If asset exists, serve it
   if (assetResponse.status === 200) {
@@ -91,7 +91,7 @@ app.get('*', async (c) => {
   // For 404s, serve index.html to enable SPA routing
   const indexUrl = new URL(url);
   indexUrl.pathname = '/index.html';
-  return c.env.ASSETS.fetch(indexUrl);
+  return c.env.ASSETS.fetch(indexUrl.toString());
 });
 
 export default app;

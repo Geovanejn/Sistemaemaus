@@ -60,6 +60,7 @@ RESEND_FROM_EMAIL = "noreply@emausvota.com.br"
 [assets]
 directory = "./dist/public"
 binding = "ASSETS"
+not_found_handling = "single-page-application"
 
 # ============================================
 # Configurações de Build
