@@ -57,11 +57,12 @@ export function createPositionsRoutes(app: Hono<AuthContext>) {
     }
   });
   
-  // GET /api/elections/:id/positions/active - Cargo ativo (ADMIN ONLY)
+  // GET /api/elections/:id/positions/active - Cargo ativo (AUTHENTICATED)
+  // IMPORTANTE: Voters precisam acessar para saber em qual cargo votar!
   positionsRouter.get('/:id/positions/active', async (c) => {
     const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    if (!user) {
+      return c.json({ error: 'Autenticação necessária' }, 401);
     }
     try {
       const storage = c.get('d1Storage') as D1Storage;

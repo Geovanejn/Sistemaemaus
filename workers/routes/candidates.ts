@@ -126,11 +126,12 @@ export function createCandidatesByPositionRoutes(app: Hono<AuthContext>) {
   
   router.use('/*', createAuthMiddleware());
   
-  // GET /api/elections/:electionId/positions/:positionId/candidates (ADMIN ONLY)
+  // GET /api/elections/:electionId/positions/:positionId/candidates (AUTHENTICATED)
+  // IMPORTANTE: Voters precisam acessar para ver quem são os candidatos antes de votar!
   router.get('/:electionId/positions/:positionId/candidates', async (c) => {
     const user = c.get('user');
-    if (!user?.isAdmin) {
-      return c.json({ error: 'Acesso negado. Apenas administradores.' }, 403);
+    if (!user) {
+      return c.json({ error: 'Autenticação necessária' }, 401);
     }
     try {
       const storage = c.get('d1Storage') as D1Storage;
